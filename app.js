@@ -389,11 +389,16 @@ function authWelcome() {
   </main>`;
 }
 
+window.isLoginMode = false;
+window.toggleAuthMode = function(mode) { 
+    window.isLoginMode = (mode === 'login'); 
+    if (selectedRole) chooseRole(selectedRole); 
+};
+
 function chooseRole(role) {
   selectedRole = role;
   localStorage.setItem('vconnectRole', role);
 
-  // Update role card styling
   const customerCard = $('.customer-role-card');
   const workerCard = $('.worker-role-card');
   if (customerCard && workerCard) {
@@ -421,31 +426,42 @@ function chooseRole(role) {
     <div class="auth-form-header">
       <div class="form-header-badge">
         <span class="role-badge ${role}">${role === 'worker' ? 'Worker Portal' : 'Customer Portal'}</span>
-        <span class="form-benefit-tag">${role === 'worker' ? '🔧 92% Direct Pay' : '✨ Fast & Verified'}</span>
       </div>
-      <h2>${role === 'worker' ? 'Worker Sign In & Registration' : 'Customer Sign In & Registration'}</h2>
+      <h2>${role === 'worker' ? (window.isLoginMode ? 'Worker Sign In' : 'Worker Registration') : (window.isLoginMode ? 'Customer Sign In' : 'Customer Registration')}</h2>
       <p class="muted">${role === 'worker' ? 'Access your assigned jobs, manage availability, and track earnings.' : 'Discover local services, book appointments, and track your requests.'}</p>
     </div>
+    
+    <!-- Sign Up / Log In Tabs -->
+    <div class="auth-toggle-tabs" style="display: flex; gap: 10px; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #eee;">
+        <button type="button" class="btn ${!window.isLoginMode ? 'lime' : 'ghost'} btn-block" onclick="toggleAuthMode('signup')">Sign Up</button>
+        <button type="button" class="btn ${window.isLoginMode ? 'lime' : 'ghost'} btn-block" onclick="toggleAuthMode('login')">Log In</button>
+    </div>
+
     <form class="form" id="authForm">
       <div class="form-field-group">
+        
+        <!-- Only show Name if signing up -->
+        ${!window.isLoginMode ? `
         <label>Full name
           <div class="input-wrapper">
             <input required name="name" placeholder="e.g. Ananya Sharma" autocomplete="name">
           </div>
         </label>
+        ` : ''}
+        
         <label>Email address
           <div class="input-wrapper">
             <input required type="email" name="email" placeholder="you@email.com" autocomplete="email">
           </div>
         </label>
         <label>Password
-        
           <div class="input-wrapper">
             <input required type="password" minlength="6" name="password" placeholder="At least 6 characters" autocomplete="current-password">
           </div>
         </label>
-
-${role === 'worker' ? `
+        
+        <!-- Only show Worker fields if signing up AND selected Worker -->
+        ${(!window.isLoginMode && role === 'worker') ? `
         <label>Service Category
           <div class="input-wrapper">
             <select name="category" required>
@@ -469,16 +485,14 @@ ${role === 'worker' ? `
           <div class="input-wrapper"><textarea required name="bio" placeholder="Tell customers about yourself..."></textarea></div>
         </label>
         ` : ''}
-
-
-        
       </div>
+      
       <button class="btn lime btn-block auth-submit-btn">
-        <span>${role === 'worker' ? 'Continue to Worker Dashboard' : 'Continue as Customer'}</span>
+        <span>${window.isLoginMode ? 'Log In to Account' : (role === 'worker' ? 'Create Worker Account' : 'Create Customer Account')}</span>
         ${icons.arrowRight}
       </button>
+      
       <div class="auth-form-footer-hint">
-        <p class="muted auth-hint">Already registered? Enter your email and password to log in.</p>
         <button type="button" class="btn-link switch-role-btn" onclick="chooseRole('${role === 'customer' ? 'worker' : 'customer'}')">
           Switch to ${role === 'customer' ? 'Worker' : 'Customer'} instead →
         </button>
@@ -489,6 +503,39 @@ ${role === 'worker' ? `
   $('#authForm')?.addEventListener('submit', handleAuthSubmit);
 }
 
+async function handleAuthSubmit(e) {
+  e.preventDefault();
+  const role = selectedRole || localStorage.getItem('vconnectRole');
+  if (!role) return $('#authNotice').innerHTML = '<div class="alert error">Please select Customer or Worker first.</div>';
+  
+  const d = Object.fromEntries(new FormData(e.target));
+  d.role = role;
+  
+  // Convert price if it's a new worker signup
+  if (!window.isLoginMode && role === 'worker') {
+      d.price = d.price ? parseInt(d.price) : 0;
+  }
+  
+  $('#authNotice').innerHTML = '<div class="alert info">Connecting...</div>';
+  
+  // Decide which API to hit based on the active tab
+  const endpoint = window.isLoginMode ? '/auth/login' : '/auth/signup';
+  
+  try {
+    const r = await api(endpoint, { method: 'POST', body: JSON.stringify(d) });
+    
+    // Safety check: Don't let a worker log in via the customer portal, and vice versa
+    if (window.isLoginMode && r.user.role !== role) {
+        throw new Error('This account is registered as a ' + r.user.role + '. Please switch roles and try again.');
+    }
+    
+    localStorage.setItem('vconnectSession', JSON.stringify(r));
+    location.hash = role === 'worker' ? '#/provider' : '#/';
+    guardedMount();
+  } catch (err) {
+    $('#authNotice').innerHTML = `<div class="alert error">${err.message}</div>`;
+  }
+}
 async function handleAuthSubmit(e) {
   e.preventDefault();
   const role = selectedRole || localStorage.getItem('vconnectRole');
