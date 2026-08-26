@@ -20,7 +20,47 @@ function getToken() { return getSession()?.token || null; }
 function isCustomer() { return getUser()?.role === 'customer'; }
 function isWorker() { return getUser()?.role === 'worker'; }
 function userName() { return getUser()?.name || 'Guest'; }
-function workerId() { return getUser()?.worker_id || 2; }
+function workerId() { return getUser()?.worker_id || null; }
+
+async function getWorkerProfile() {
+  const user = getUser();
+  const wid = workerId();
+  if (wid) {
+    try {
+      const w = await api('/workers/' + wid);
+      if (w && w.id) return w;
+    } catch {}
+  }
+  if (user && user.name) {
+    try {
+      const all = await api('/workers?search=' + encodeURIComponent(user.name.trim()));
+      const match = all.find(w => w.name.toLowerCase().trim() === user.name.toLowerCase().trim());
+      if (match) {
+        user.worker_id = match.id;
+        const sess = getSession();
+        if (sess) {
+          sess.user.worker_id = match.id;
+          localStorage.setItem('vconnectSession', JSON.stringify(sess));
+        }
+        return match;
+      }
+    } catch {}
+  }
+  const initials = user?.name ? user.name.trim().split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'VC';
+  return {
+    id: wid || 0,
+    name: user?.name || 'Worker',
+    category: 'Local Professional',
+    skills: 'Reliable Local Services · Cooperative Member',
+    rating: 5.0,
+    reviews: 0,
+    experience: '1 year',
+    price: 400,
+    available: 1,
+    avatar: initials,
+    bio: 'Cooperative member'
+  };
+}
 
 const CUSTOMER_ROUTES = new Set(['customer', 'emergency', 'groups', 'track']);
 const WORKER_ROUTES = new Set(['provider', 'jobs', 'availability', 'earnings', 'join']);
@@ -56,8 +96,15 @@ const icons = {
   help: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 015 1c0 2-2.5 2-2.5 4M12 17h.01"/></svg>',
   logout: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
   menu: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
-  customer: '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H5a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>',
-  worker: '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><path d="M12 12v2M8 12v2M16 12v2"/></svg>'
+  customer: '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H5a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>',
+  worker: '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><path d="M12 12v2M8 12v2M16 12v2"/></svg>',
+  shieldCheck: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>',
+  rupee: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12M6 8h12M6 13l8.5 8M6 13h3a4 4 0 0 0 0-8"/></svg>',
+  users: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  lock: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  arrowRight: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
+  check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>',
+  star: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
 };
 
 function currentRoute() {
@@ -116,7 +163,15 @@ function nav() {
 }
 
 function authNav() {
-  return `<nav class="nav auth-nav"><a class="brand" href="#/"><i>V</i>Connect</a><span class="nav-tagline">Connecting Communities with Trusted Services</span></nav>`;
+  return `<nav class="nav auth-nav">
+    <div class="nav-left">
+      <a class="brand" href="#/"><i>V</i>Connect</a>
+      <span class="coop-pill"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> VConnect Cooperative</span>
+    </div>
+    <div class="auth-nav-right">
+      <span class="nav-tagline">Connecting Communities with Trusted Services</span>
+    </div>
+  </nav>`;
 }
 
 function foot() {
@@ -159,52 +214,250 @@ function statCard(label, value, accent) {
 let selectedRole = localStorage.getItem('vconnectRole') || '';
 
 function authWelcome() {
+  const currentSelected = selectedRole || 'customer';
   return `<main class="auth-page page-enter">
-    <section class="auth-hero">
-      <span class="eyebrow">✦ VConnect cooperative</span>
-      <h1>Connecting communities with <em>trusted services.</em></h1>
-      <p>Choose how you'd like to use VConnect. Your experience is tailored to your role.</p>
-    </section>
-    <div class="role-cards">
-      <button class="role-card ${selectedRole === 'customer' ? 'selected' : ''}" onclick="chooseRole('customer')" type="button">
-        <div class="role-icon customer-icon">${icons.customer}</div>
-        <h3>Customer</h3>
-        <p>Book services, manage your bookings, track requests and get support.</p>
-        <span class="role-check">${selectedRole === 'customer' ? '✓ Selected' : 'Select role'}</span>
-      </button>
-      <button class="role-card ${selectedRole === 'worker' ? 'selected' : ''}" onclick="chooseRole('worker')" type="button">
-        <div class="role-icon worker-icon">${icons.worker}</div>
-        <h3>Worker</h3>
-        <p>Manage assigned jobs, accept requests, update availability and track your work.</p>
-        <span class="role-check">${selectedRole === 'worker' ? '✓ Selected' : 'Select role'}</span>
-      </button>
+    <!-- Ambient Background Glows & Pattern -->
+    <div class="auth-bg-elements" aria-hidden="true">
+      <div class="bg-orb orb-1"></div>
+      <div class="bg-orb orb-2"></div>
+      <div class="bg-orb orb-3"></div>
+      <div class="bg-grid-pattern"></div>
     </div>
-    <section id="authBox"></section>
+
+    <!-- Hero Section with Centered Focus -->
+    <section class="auth-hero-center">
+      <div class="auth-badge-pill animate-up">
+        <span class="badge-pulse"></span>
+        <span>✦ VConnect Cooperative Platform</span>
+      </div>
+
+      <h1 class="auth-headline animate-up">
+        Connecting communities with <span class="highlight-gradient">trusted services.</span>
+      </h1>
+
+      <p class="auth-subhead animate-up">
+        Find trusted local professionals. Earn fairly. Build stronger communities together.
+      </p>
+
+      <div class="role-selection-wrapper">
+        <div class="role-prompt-heading">
+          <span class="prompt-num">01</span>
+          <div>
+            <h3>How would you like to continue?</h3>
+            <p class="muted">Select your role to get tailored access to VConnect</p>
+          </div>
+        </div>
+
+        <div class="role-cards-grid">
+          <!-- Customer Role Card -->
+          <div class="role-card customer-role-card ${currentSelected === 'customer' ? 'selected' : ''}" onclick="chooseRole('customer')">
+            <div class="role-card-top">
+              <div class="role-icon-box customer-icon">${icons.customer}</div>
+              <div class="role-meta-tag">
+                <span class="role-select-indicator ${currentSelected === 'customer' ? 'active' : ''}">
+                  <span class="indicator-dot"></span>
+                  <span class="indicator-text">${currentSelected === 'customer' ? '✓ Selected' : 'Select'}</span>
+                </span>
+              </div>
+            </div>
+            
+            <div class="role-card-body">
+              <div class="role-title-row">
+                <h3>Customer</h3>
+                <span class="role-sub-badge">Book Services</span>
+              </div>
+              <p class="role-desc">Find trusted local services, compare verified professionals, and book with complete confidence.</p>
+              
+              <div class="role-benefit-pills">
+                <span class="pill-badge">${icons.check} Easy Booking</span>
+                <span class="pill-badge">${icons.check} Trusted Workers</span>
+                <span class="pill-badge">${icons.check} Secure & Safe</span>
+              </div>
+            </div>
+
+            <div class="role-card-footer">
+              <button class="role-cta-btn customer-btn" type="button">
+                <span>Continue as Customer</span>
+                ${icons.arrowRight}
+              </button>
+            </div>
+          </div>
+
+          <!-- Worker Role Card -->
+          <div class="role-card worker-role-card ${currentSelected === 'worker' ? 'selected' : ''}" onclick="chooseRole('worker')">
+            <div class="role-card-top">
+              <div class="role-icon-box worker-icon">${icons.worker}</div>
+              <div class="role-meta-tag">
+                <span class="role-select-indicator ${currentSelected === 'worker' ? 'active' : ''}">
+                  <span class="indicator-dot"></span>
+                  <span class="indicator-text">${currentSelected === 'worker' ? '✓ Selected' : 'Select'}</span>
+                </span>
+              </div>
+            </div>
+            
+            <div class="role-card-body">
+              <div class="role-title-row">
+                <h3>Worker</h3>
+                <span class="role-sub-badge worker-sub-badge">Co-op Member</span>
+              </div>
+              <p class="role-desc">Offer your skills, receive local service requests, keep 92% of earnings, and grow with your community.</p>
+              
+              <div class="role-benefit-pills">
+                <span class="pill-badge">${icons.check} More Jobs</span>
+                <span class="pill-badge">${icons.check} 92% Fair Pay</span>
+                <span class="pill-badge">${icons.check} Grow with Us</span>
+              </div>
+            </div>
+
+            <div class="role-card-footer">
+              <button class="role-cta-btn worker-btn" type="button">
+                <span>Continue as Worker</span>
+                ${icons.arrowRight}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auth Form Section (Injected dynamically) -->
+        <section id="authBox" class="auth-box-container"></section>
+      </div>
+    </section>
+
+    <!-- Trust & Benefit Section (4 Cards) -->
+    <section class="auth-trust-section">
+      <div class="section-title-wrap">
+        <span class="eyebrow">Why Choose VConnect</span>
+        <h2>Built around fair work, safety, and community trust.</h2>
+      </div>
+      <div class="trust-grid-4">
+        <div class="trust-card">
+          <div class="trust-card-icon icon-shield">${icons.shieldCheck}</div>
+          <h3>Verified & Trusted</h3>
+          <p>Every worker is identity & skill verified for quality, safety, and reliable service.</p>
+        </div>
+
+        <div class="trust-card">
+          <div class="trust-card-icon icon-rupee">${icons.rupee}</div>
+          <h3>Fair & Transparent</h3>
+          <p>Clear upfront pricing with 92% paid directly to workers and a visible 8% co-op fund.</p>
+        </div>
+
+        <div class="trust-card">
+          <div class="trust-card-icon icon-community">${icons.users}</div>
+          <h3>Community First</h3>
+          <p>Worker-owned cooperative supporting emergency services and local neighbourhood help.</p>
+        </div>
+
+        <div class="trust-card">
+          <div class="trust-card-icon icon-secure">${icons.lock}</div>
+          <h3>Secure & Reliable</h3>
+          <p>Real-time booking tracking, transparent VTrust scores, and dedicated peer support.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Community Statistics Bar -->
+    <section class="auth-stats-bar glass-card">
+      <div class="auth-stat-item">
+        <span class="stat-icon-sparkle">👥</span>
+        <div class="stat-number">10K+</div>
+        <div class="stat-title">Happy Customers</div>
+        <p class="stat-desc">Across local communities</p>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="auth-stat-item">
+        <span class="stat-icon-sparkle">🔧</span>
+        <div class="stat-number">1,500+</div>
+        <div class="stat-title">Verified Workers</div>
+        <p class="stat-desc">Skilled local professionals</p>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="auth-stat-item">
+        <span class="stat-icon-sparkle">★</span>
+        <div class="stat-number">4.9 / 5</div>
+        <div class="stat-title">Average Rating</div>
+        <p class="stat-desc">From neighbour reviews</p>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="auth-stat-item">
+        <span class="stat-icon-sparkle">🌱</span>
+        <div class="stat-number">8%</div>
+        <div class="stat-title">Co-op Contribution</div>
+        <p class="stat-desc">Zero hidden middleman cuts</p>
+      </div>
+    </section>
   </main>`;
 }
 
 function chooseRole(role) {
   selectedRole = role;
   localStorage.setItem('vconnectRole', role);
-  $$('.role-card').forEach(c => c.classList.remove('selected'));
-  $$('.role-card')[role === 'customer' ? 0 : 1]?.classList.add('selected');
-  $$('.role-check').forEach((el, i) => { el.textContent = (i === (role === 'customer' ? 0 : 1)) ? '✓ Selected' : 'Select role'; });
-  $('#authBox').innerHTML = `<div class="auth-form-card animate-up">
+
+  // Update role card styling
+  const customerCard = $('.customer-role-card');
+  const workerCard = $('.worker-role-card');
+  if (customerCard && workerCard) {
+    if (role === 'customer') {
+      customerCard.classList.add('selected');
+      workerCard.classList.remove('selected');
+      const ci = customerCard.querySelector('.role-select-indicator');
+      const wi = workerCard.querySelector('.role-select-indicator');
+      if (ci) { ci.classList.add('active'); ci.querySelector('.indicator-text').textContent = '✓ Selected'; }
+      if (wi) { wi.classList.remove('active'); wi.querySelector('.indicator-text').textContent = 'Select'; }
+    } else {
+      workerCard.classList.add('selected');
+      customerCard.classList.remove('selected');
+      const ci = customerCard.querySelector('.role-select-indicator');
+      const wi = workerCard.querySelector('.role-select-indicator');
+      if (wi) { wi.classList.add('active'); wi.querySelector('.indicator-text').textContent = '✓ Selected'; }
+      if (ci) { ci.classList.remove('active'); ci.querySelector('.indicator-text').textContent = 'Select'; }
+    }
+  }
+
+  const authBox = $('#authBox');
+  if (!authBox) return;
+
+  authBox.innerHTML = `<div class="auth-form-card animate-up">
     <div class="auth-form-header">
-      <span class="role-badge ${role}">${role === 'worker' ? 'Worker' : 'Customer'}</span>
-      <h2>${role === 'worker' ? 'Worker sign in' : 'Customer sign in'}</h2>
-      <p class="muted">${role === 'worker' ? 'Access your dashboard, jobs, and earnings.' : 'Book services and manage your requests.'}</p>
+      <div class="form-header-badge">
+        <span class="role-badge ${role}">${role === 'worker' ? 'Worker Portal' : 'Customer Portal'}</span>
+        <span class="form-benefit-tag">${role === 'worker' ? '🔧 92% Direct Pay' : '✨ Fast & Verified'}</span>
+      </div>
+      <h2>${role === 'worker' ? 'Worker Sign In & Registration' : 'Customer Sign In & Registration'}</h2>
+      <p class="muted">${role === 'worker' ? 'Access your assigned jobs, manage availability, and track earnings.' : 'Discover local services, book appointments, and track your requests.'}</p>
     </div>
     <form class="form" id="authForm">
-      <label>Full name<input required name="name" placeholder="Your full name"></label>
-      <label>Email<input required type="email" name="email" placeholder="you@email.com"></label>
-      <label>Password<input required type="password" minlength="6" name="password" placeholder="At least 6 characters"></label>
-      <button class="btn lime btn-block">Create account / Log in</button>
-      <p class="muted auth-hint">Already registered? Enter the same email and password.</p>
+      <div class="form-field-group">
+        <label>Full name
+          <div class="input-wrapper">
+            <input required name="name" placeholder="e.g. Ananya Sharma" autocomplete="name">
+          </div>
+        </label>
+        <label>Email address
+          <div class="input-wrapper">
+            <input required type="email" name="email" placeholder="you@email.com" autocomplete="email">
+          </div>
+        </label>
+        <label>Password
+          <div class="input-wrapper">
+            <input required type="password" minlength="6" name="password" placeholder="At least 6 characters" autocomplete="current-password">
+          </div>
+        </label>
+      </div>
+      <button class="btn lime btn-block auth-submit-btn">
+        <span>${role === 'worker' ? 'Continue to Worker Dashboard' : 'Continue as Customer'}</span>
+        ${icons.arrowRight}
+      </button>
+      <div class="auth-form-footer-hint">
+        <p class="muted auth-hint">Already registered? Enter your email and password to log in.</p>
+        <button type="button" class="btn-link switch-role-btn" onclick="chooseRole('${role === 'customer' ? 'worker' : 'customer'}')">
+          Switch to ${role === 'customer' ? 'Worker' : 'Customer'} instead →
+        </button>
+      </div>
       <div id="authNotice"></div>
     </form>
   </div>`;
-  $('#authForm').addEventListener('submit', handleAuthSubmit);
+  $('#authForm')?.addEventListener('submit', handleAuthSubmit);
 }
 
 async function handleAuthSubmit(e) {
@@ -302,15 +555,11 @@ async function customerDashboard() {
 }
 
 async function workerDashboard() {
-  const name = userName();
-  const wid = workerId();
-  let worker, items;
-  try {
-    worker = await api('/workers/' + wid);
-    items = await api('/bookings?worker_id=' + wid);
-  } catch {
-    worker = { name, category: 'Service Provider', available: 1, avatar: name.split(' ').map(n => n[0]).join('').slice(0, 2) };
-    items = [];
+  const worker = await getWorkerProfile();
+  const name = worker.name || userName();
+  let items = [];
+  if (worker.id) {
+    try { items = await api('/bookings?worker_id=' + worker.id); } catch { items = []; }
   }
   const earnings = items.filter(x => x.status === 'Completed').reduce((n, x) => n + x.price * .92, 0);
   const pending = items.filter(x => x.status === 'Pending');
@@ -318,7 +567,7 @@ async function workerDashboard() {
   return `<main class="page page-enter">
     <div class="dash-header">
       <div>
-        <span class="eyebrow">Worker Dashboard</span>
+        <span class="eyebrow">Worker Dashboard · ${esc(name)}</span>
         <h1 class="page-title">Welcome back, ${esc(name.split(' ')[0])}! 🔧</h1>
         <p class="lead">Manage your jobs, update availability, and track your earnings.</p>
       </div>
@@ -348,7 +597,7 @@ async function workerDashboard() {
       </section>
     </div>
     <section class="section-inline">
-      <div class="split"><div><h2>Pending booking requests</h2><p class="lead">Review and respond to new customer requests</p></div><a class="btn ghost" href="#/provider">Manage all →</a></div>
+      <div class="split"><div><h2>Pending booking requests</h2><p class="lead">Review and respond to new customer requests</p></div><a class="btn ghost" href="#/jobs">Manage all →</a></div>
       ${bookingList(pending.slice(0, 5), 'provider')}
     </section>
   </main>`;
@@ -411,20 +660,25 @@ async function trackBooking() {
 }
 
 async function provider() {
-  const wid = workerId();
-  const worker = await api('/workers/' + wid);
-  const items = await api('/bookings?worker_id=' + wid);
+  const worker = await getWorkerProfile();
+  let items = [];
+  if (worker.id) {
+    try { items = await api('/bookings?worker_id=' + worker.id); } catch { items = []; }
+  }
   const earnings = items.filter(x => x.status === 'Completed').reduce((n, x) => n + x.price * .92, 0);
   return `<main class="page page-enter"><span class="eyebrow">Worker Dashboard · ${esc(worker.name)}</span><h1 class="page-title">Manage your work</h1><div class="dash-grid"><aside class="side-nav"><div class="side-profile"><div class="avatar">${worker.avatar}</div><b>${esc(worker.name)}</b><p class="muted">${esc(worker.category)}</p></div><nav class="side-links"><a class="active" href="#/provider">Overview</a><a href="#/jobs">Assigned jobs</a><a href="#/availability">Availability</a><a href="#/earnings">Earnings</a></nav><button class="btn lime btn-block" id="availability">${worker.available ? '● Available today' : '○ Mark available'}</button></aside><section class="dash-main"><div class="grid stats">${statCard('Pending', items.filter(x => x.status === 'Pending').length, 'accent-coral')}${statCard('Upcoming', items.filter(x => x.status === 'Accepted').length)}${statCard('Completed', items.filter(x => x.status === 'Completed').length, 'accent-green')}${statCard('Earnings', '₹' + Math.round(earnings), 'accent-lime')}</div><h2>Service requests</h2>${bookingList(items, 'provider')}</section></div></main>`;
 }
 
 async function jobsPage() {
-  const wid = workerId();
-  const items = await api('/bookings?worker_id=' + wid);
+  const worker = await getWorkerProfile();
+  let items = [];
+  if (worker.id) {
+    try { items = await api('/bookings?worker_id=' + worker.id); } catch { items = []; }
+  }
   const pending = items.filter(x => x.status === 'Pending');
   const active = items.filter(x => ['Accepted', 'In Progress'].includes(x.status));
   const done = items.filter(x => x.status === 'Completed');
-  return `<main class="page page-enter"><span class="eyebrow">Assigned jobs</span><h1 class="page-title">Your jobs</h1><p class="lead">Pending requests, active work, and completed jobs.</p>
+  return `<main class="page page-enter"><span class="eyebrow">Assigned jobs · ${esc(worker.name)}</span><h1 class="page-title">Your jobs</h1><p class="lead">Pending requests, active work, and completed jobs.</p>
   <div class="tab-bar"><button class="tab active" data-tab="pending">Pending (${pending.length})</button><button class="tab" data-tab="active">Active (${active.length})</button><button class="tab" data-tab="done">Completed (${done.length})</button></div>
   <div id="tab-pending" class="tab-panel">${bookingList(pending, 'provider')}</div>
   <div id="tab-active" class="tab-panel hidden">${bookingList(active, 'provider')}</div>
@@ -432,20 +686,22 @@ async function jobsPage() {
 }
 
 async function availabilityPage() {
-  const wid = workerId();
-  const worker = await api('/workers/' + wid);
-  return `<main class="page page-enter"><span class="eyebrow">Availability</span><h1 class="page-title">Your availability</h1><p class="lead">Let customers know when you're ready to take on new work.</p>
+  const worker = await getWorkerProfile();
+  return `<main class="page page-enter"><span class="eyebrow">Availability · ${esc(worker.name)}</span><h1 class="page-title">Your availability</h1><p class="lead">Let customers know when you're ready to take on new work.</p>
   <div class="profile-pane availability-card"><div class="availability-status ${worker.available ? 'online' : 'offline'}"><span class="status-dot"></span><div><h2>${worker.available ? 'You are available' : 'You are unavailable'}</h2><p class="muted">${worker.available ? 'Customers can book you for today.' : 'You won\'t appear in "available now" searches.'}</p></div></div><button class="btn lime btn-block" id="toggleAvailability">${worker.available ? 'Mark as unavailable' : 'Mark as available'}</button></div>
   <div class="profile-pane" style="margin-top:20px"><h3>Schedule tips</h3><ul class="help-list"><li>Keep your availability updated daily for better matches.</li><li>Respond to pending requests within 2 hours when possible.</li><li>High VTrust scores lead to more customer bookings.</li></ul></div></main>`;
 }
 
 async function earningsPage() {
-  const wid = workerId();
-  const items = await api('/bookings?worker_id=' + wid);
+  const worker = await getWorkerProfile();
+  let items = [];
+  if (worker.id) {
+    try { items = await api('/bookings?worker_id=' + worker.id); } catch { items = []; }
+  }
   const completed = items.filter(x => x.status === 'Completed');
   const earnings = completed.reduce((n, x) => n + x.price * .92, 0);
   const coOp = completed.reduce((n, x) => n + x.price * .08, 0);
-  return `<main class="page page-enter"><span class="eyebrow">Earnings</span><h1 class="page-title">Your earnings</h1><p class="lead">Transparent breakdown of your completed work.</p>
+  return `<main class="page page-enter"><span class="eyebrow">Earnings · ${esc(worker.name)}</span><h1 class="page-title">Your earnings</h1><p class="lead">Transparent breakdown of your completed work.</p>
   <div class="grid stats">${statCard('Total earned', '₹' + Math.round(earnings), 'accent-lime')}${statCard('Co-op contribution', '₹' + Math.round(coOp))}${statCard('Jobs completed', completed.length, 'accent-green')}${statCard('Avg. per job', completed.length ? '₹' + Math.round(earnings / completed.length) : '₹0')}</div>
   <section class="profile-pane"><h2>Completed job history</h2>${completed.length ? bookingList(completed, 'provider') : '<div class="empty-state compact"><p>Complete jobs to see earnings here.</p></div>'}</section></main>`;
 }
