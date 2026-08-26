@@ -390,9 +390,25 @@ function authWelcome() {
 }
 
 window.isLoginMode = false;
+
 window.toggleAuthMode = function(mode) { 
     window.isLoginMode = (mode === 'login'); 
     if (selectedRole) chooseRole(selectedRole); 
+};
+
+// 1. New function to toggle password visibility
+window.togglePassword = function() {
+    const pwd = document.getElementById('authPassword');
+    const eye = document.getElementById('eyeIcon');
+    if (pwd && pwd.type === 'password') {
+        pwd.type = 'text';
+        // Change to "eye-off" icon
+        eye.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>';
+    } else if (pwd) {
+        pwd.type = 'password';
+        // Change back to regular "eye" icon
+        eye.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
+    }
 };
 
 function chooseRole(role) {
@@ -454,9 +470,17 @@ function chooseRole(role) {
             <input required type="email" name="email" placeholder="you@email.com" autocomplete="email">
           </div>
         </label>
+        
+        <!-- 2. Updated Password Field with Eye Icon -->
         <label>Password
-          <div class="input-wrapper">
-            <input required type="password" minlength="6" name="password" placeholder="At least 6 characters" autocomplete="current-password">
+          <div class="input-wrapper" style="position: relative; display: flex; align-items: center;">
+            <input required type="password" id="authPassword" minlength="6" name="password" placeholder="At least 6 characters" autocomplete="current-password" style="width: 100%; padding-right: 40px;">
+            <button type="button" onclick="togglePassword()" style="position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: #888; padding: 5px; display: flex; justify-content: center; align-items: center;" aria-label="Toggle password visibility">
+                <svg id="eyeIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>
           </div>
         </label>
         
@@ -503,6 +527,43 @@ function chooseRole(role) {
   $('#authForm')?.addEventListener('submit', handleAuthSubmit);
 }
 
+async function handleAuthSubmit(e) {
+  e.preventDefault();
+  const role = selectedRole || localStorage.getItem('vconnectRole');
+  if (!role) return $('#authNotice').innerHTML = '<div class="alert error">Please select Customer or Worker first.</div>';
+  
+  const formData = new FormData(e.target);
+  let payload = {};
+  
+  // 3. Prevent 'field required' backend errors by strictly sending ONLY what is needed
+  if (window.isLoginMode) {
+      payload = {
+          email: formData.get('email'),
+          password: formData.get('password')
+      };
+  } else {
+      payload = Object.fromEntries(formData);
+      payload.role = role;
+      if (role === 'worker') {
+          payload.price = payload.price ? parseInt(payload.price) : 0;
+      }
+  }
+  
+  $('#authNotice').innerHTML = '<div class="alert info">Connecting...</div>';
+  const endpoint = window.isLoginMode ? '/auth/login' : '/auth/signup';
+  
+  try {
+    const r = await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
+    if (window.isLoginMode && r.user.role !== role) {
+        throw new Error('This account is registered as a ' + r.user.role + '. Please switch roles and try again.');
+    }
+    localStorage.setItem('vconnectSession', JSON.stringify(r));
+    location.hash = role === 'worker' ? '#/provider' : '#/';
+    guardedMount();
+  } catch (err) {
+    $('#authNotice').innerHTML = `<div class="alert error">${err.message}</div>`;
+  }
+}
 async function handleAuthSubmit(e) {
   e.preventDefault();
   const role = selectedRole || localStorage.getItem('vconnectRole');
