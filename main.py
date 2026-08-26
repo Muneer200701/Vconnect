@@ -6,20 +6,25 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from recommendations import rank_workers, vtrust_score
 
-
-
-
-
-
-
-
-
 DB = Path(__file__).parent / "vconnect.db"
+
+# 1. Initialize the app exactly ONCE
 app = FastAPI(title="VConnect API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# 2. Mount static files (CSS/JS)
+app.mount("/static", StaticFiles(directory="."), name="static")
+
+# 3. Serve the index.html page on the main URL
+@app.get("/")
+def read_root():
+    return FileResponse("index.html")
+
+# --- All your Pydantic Models and Database Logic ---
 
 class WorkerAvailabilityUpdate(BaseModel):
     available: int
@@ -344,8 +349,3 @@ def admin_summary():
     members=rows('SELECT count(*) AS n FROM memberships')[0]['n']
     active=rows('SELECT count(*) AS n FROM workers WHERE available=1')[0]['n']
     return {'members':members,'active_workers':active,'completed_services':completed,'community_earnings':completed*450+12650,'commission':'For every ₹500 service: ₹460 goes to the worker and ₹40 (8%) funds cooperative training, support, and local community programs.','members_list':rows('SELECT workers.name,workers.category,workers.rating,workers.avatar,memberships.joined_at FROM memberships JOIN workers ON workers.id=memberships.worker_id')}
-
-frontend_dir = Path(__file__).parent.parent / "frontend"
-if frontend_dir.exists():
-    app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
-
