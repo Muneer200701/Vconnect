@@ -439,10 +439,39 @@ function chooseRole(role) {
           </div>
         </label>
         <label>Password
+        
           <div class="input-wrapper">
             <input required type="password" minlength="6" name="password" placeholder="At least 6 characters" autocomplete="current-password">
           </div>
         </label>
+
+${role === 'worker' ? `
+        <label>Service Category
+          <div class="input-wrapper">
+            <select name="category" required>
+                <option value="Plumbing">Plumbing</option>
+                <option value="Electrical">Electrical</option>
+                <option value="Cleaning">Cleaning</option>
+                <option value="Carpentry">Carpentry</option>
+            </select>
+          </div>
+        </label>
+        <label>Specific Skills
+          <div class="input-wrapper"><input required name="skills" placeholder="e.g. Pipe fitting, wiring"></div>
+        </label>
+        <label>Experience
+          <div class="input-wrapper"><input required name="experience" placeholder="e.g. 5 years"></div>
+        </label>
+        <label>Hourly Price (₹)
+          <div class="input-wrapper"><input required type="number" name="price" placeholder="e.g. 300"></div>
+        </label>
+        <label>Bio
+          <div class="input-wrapper"><textarea required name="bio" placeholder="Tell customers about yourself..."></textarea></div>
+        </label>
+        ` : ''}
+
+
+        
       </div>
       <button class="btn lime btn-block auth-submit-btn">
         <span>${role === 'worker' ? 'Continue to Worker Dashboard' : 'Continue as Customer'}</span>
@@ -464,8 +493,18 @@ async function handleAuthSubmit(e) {
   e.preventDefault();
   const role = selectedRole || localStorage.getItem('vconnectRole');
   if (!role) return $('#authNotice').innerHTML = '<div class="alert error">Please select Customer or Worker first.</div>';
-  const d = Object.fromEntries(new FormData(e.target));
+  //const d = Object.fromEntries(new FormData(e.target));
+  //d.role = role;
+
+const d = Object.fromEntries(new FormData(e.target));
   d.role = role;
+  
+  // Convert the price from text to a number
+  if (role === 'worker') {
+      d.price = d.price ? parseInt(d.price) : 0;
+  }
+
+  
   $('#authNotice').innerHTML = '<div class="alert info">Connecting...</div>';
   try {
     const r = await api('/auth/signup', { method: 'POST', body: JSON.stringify(d) });
