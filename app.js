@@ -107,6 +107,7 @@ const icons = {
   star: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
 };
 
+
 function currentRoute() {
   return (location.hash.slice(2).split('?')[0].split('/')[0]) || '';
 }
@@ -535,7 +536,7 @@ async function handleAuthSubmit(e) {
   const formData = new FormData(e.target);
   let payload = {};
   
-  // 3. Prevent 'field required' backend errors by strictly sending ONLY what is needed
+  // 1. Strictly separate Login vs Sign Up data to prevent FastAPI "field required" errors
   if (window.isLoginMode) {
       payload = {
           email: formData.get('email'),
@@ -554,38 +555,8 @@ async function handleAuthSubmit(e) {
   
   try {
     const r = await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
-    if (window.isLoginMode && r.user.role !== role) {
-        throw new Error('This account is registered as a ' + r.user.role + '. Please switch roles and try again.');
-    }
-    localStorage.setItem('vconnectSession', JSON.stringify(r));
-    location.hash = role === 'worker' ? '#/provider' : '#/';
-    guardedMount();
-  } catch (err) {
-    $('#authNotice').innerHTML = `<div class="alert error">${err.message}</div>`;
-  }
-}
-async function handleAuthSubmit(e) {
-  e.preventDefault();
-  const role = selectedRole || localStorage.getItem('vconnectRole');
-  if (!role) return $('#authNotice').innerHTML = '<div class="alert error">Please select Customer or Worker first.</div>';
-  
-  const d = Object.fromEntries(new FormData(e.target));
-  d.role = role;
-  
-  // Convert price if it's a new worker signup
-  if (!window.isLoginMode && role === 'worker') {
-      d.price = d.price ? parseInt(d.price) : 0;
-  }
-  
-  $('#authNotice').innerHTML = '<div class="alert info">Connecting...</div>';
-  
-  // Decide which API to hit based on the active tab
-  const endpoint = window.isLoginMode ? '/auth/login' : '/auth/signup';
-  
-  try {
-    const r = await api(endpoint, { method: 'POST', body: JSON.stringify(d) });
     
-    // Safety check: Don't let a worker log in via the customer portal, and vice versa
+    // Safety check for roles
     if (window.isLoginMode && r.user.role !== role) {
         throw new Error('This account is registered as a ' + r.user.role + '. Please switch roles and try again.');
     }
@@ -593,49 +564,38 @@ async function handleAuthSubmit(e) {
     localStorage.setItem('vconnectSession', JSON.stringify(r));
     location.hash = role === 'worker' ? '#/provider' : '#/';
     guardedMount();
+    
   } catch (err) {
-    $('#authNotice').innerHTML = `<div class="alert error">${err.message}</div>`;
-  }
-}
-async function handleAuthSubmit(e) {
-  e.preventDefault();
-  const role = selectedRole || localStorage.getItem('vconnectRole');
-  if (!role) return $('#authNotice').innerHTML = '<div class="alert error">Please select Customer or Worker first.</div>';
-  //const d = Object.fromEntries(new FormData(e.target));
-  //d.role = role;
-
-const d = Object.fromEntries(new FormData(e.target));
-  d.role = role;
-  
-  // Convert the price from text to a number
-  if (role === 'worker') {
-      d.price = d.price ? parseInt(d.price) : 0;
-  }
-
-  
-  $('#authNotice').innerHTML = '<div class="alert info">Connecting...</div>';
-  try {
-    const r = await api('/auth/signup', { method: 'POST', body: JSON.stringify(d) });
-    localStorage.setItem('vconnectSession', JSON.stringify(r));
-    location.hash = role === 'worker' ? '#/provider' : '#/';
-    guardedMount();
-  } catch (signupErr) {
-    if (signupErr.message && (signupErr.message.includes('already exists') || signupErr.message.includes('409'))) {
-      try {
-        const r = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email: d.email, password: d.password }) });
-        if (r.user.role !== role) throw new Error('This account is registered as ' + r.user.role + '. Please select the correct role.');
-        localStorage.setItem('vconnectSession', JSON.stringify(r));
-        location.hash = role === 'worker' ? '#/provider' : '#/';
-        guardedMount();
-      } catch (loginErr) {
-        $('#authNotice').innerHTML = `<div class="alert error">${loginErr.message}</div>`;
-      }
-    } else {
-      $('#authNotice').innerHTML = `<div class="alert error">${signupErr.message}</div>`;
+    // 2. SMART FALLBACK: If they try to sign up but the account exists, log them in automatically!
+    if (!window.isLoginMode && (err.message.includes('already exists') || err.message.includes('409'))) {
+        $('#authNotice').innerHTML = '<div class="alert info">Account found! Logging you in...</div>';
+        try {
+            const loginFallback = await api('/auth/login', { 
+                method: 'POST', 
+                body: JSON.stringify({ email: payload.email, password: payload.password }) 
+            });
+            if (loginFallback.user.role !== role) {
+                throw new Error('This account is registered as a ' + loginFallback.user.role + '. Please switch roles.');
+            }
+            localStorage.setItem('vconnectSession', JSON.stringify(loginFallback));
+            location.hash = role === 'worker' ? '#/provider' : '#/';
+            guardedMount();
+            return;
+        } catch (fallbackErr) {
+            $('#authNotice').innerHTML = `<div class="alert error">${fallbackErr.message}</div>`;
+            return;
+        }
     }
+    
+    // 3. Make any remaining errors highly readable
+    let errorMsg = err.message;
+    if (errorMsg.includes('field required') || errorMsg.includes('missing')) {
+        errorMsg = "Check your inputs. The server says: " + errorMsg;
+    }
+    
+    $('#authNotice').innerHTML = `<div class="alert error">${errorMsg}</div>`;
   }
 }
-
 function logoutUser() {
   const token = getToken();
   if (token) api('/auth/logout', { method: 'POST' }).catch(() => {});
