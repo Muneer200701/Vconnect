@@ -10,29 +10,7 @@ from pydantic import BaseModel, Field
 from recommendations import rank_workers, vtrust_score
 
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-import os
 
-app = FastAPI()
-
-# ----------------------------------------------------
-# 1. Mount current directory so style.css & app.js can load
-# ----------------------------------------------------
-app.mount("/static", StaticFiles(directory="."), name="static")
-
-# ----------------------------------------------------
-# 2. Add root route to serve index.html
-# ----------------------------------------------------
-@app.get("/")
-def read_root():
-    return FileResponse("index.html")
-
-# ----------------------------------------------------
-# 3. Your existing API routes & endpoints go below
-# ----------------------------------------------------
-# @app.get("/api/...")
 
 
 
