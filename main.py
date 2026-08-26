@@ -139,28 +139,61 @@ def enrich_workers(workers):
     return workers
 
 def password_hash(password): return hashlib.pbkdf2_hmac('sha256', password.encode(), b'vconnect-demo-salt', 100_000).hex()
+
+def get_or_create_worker_for_user(con, user_id: int, user_name: str) -> int:
+    row = con.execute('SELECT worker_id FROM users WHERE id=?', (user_id,)).fetchone()
+    if row and row[0]:
+        w = con.execute('SELECT id FROM workers WHERE id=?', (row[0],)).fetchone()
+        if w: return w[0]
+    
+    found_w = con.execute('SELECT id FROM workers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', (user_name,)).fetchone()
+    if found_w:
+        worker_id = found_w[0]
+    else:
+        initials = ''.join(part[0].upper() for part in user_name.strip().split()[:2]) or 'VC'
+        cur = con.execute('''INSERT INTO workers(name, category, skills, rating, reviews, experience, price, available, distance, avatar, bio, lat, lng, cooperative_member)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        (user_name.strip(), 'Local Professional', 'Reliable Local Services · Cooperative Member', 5.0, 0, '1 year', 400, 1, 2.0, initials, f'Verified cooperative member {user_name.strip()}.', 28.6200, 77.2100, 1))
+        worker_id = cur.lastrowid
+        con.execute('INSERT INTO memberships(worker_id, joined_at, contribution_percent) VALUES(?, ?, ?)', (worker_id, datetime.now().date().isoformat(), 8))
+    
+    con.execute('UPDATE users SET worker_id=? WHERE id=?', (worker_id, user_id))
+    return worker_id
+
 def current_user(token: Optional[str]):
     if not token: raise HTTPException(401,'Please log in first')
-    found=rows('SELECT users.id,users.name,users.email,users.role,users.worker_id FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token=?',(token,))
-    if not found: raise HTTPException(401,'Your session has expired')
-    return found[0]
+    with connection() as con:
+        found = con.execute('SELECT users.id,users.name,users.email,users.role,users.worker_id FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token=?',(token,)).fetchone()
+        if not found: raise HTTPException(401,'Your session has expired')
+        user = dict(found)
+        if user['role'] == 'worker' and not user['worker_id']:
+            user['worker_id'] = get_or_create_worker_for_user(con, user['id'], user['name'])
+        return user
 
 @app.post('/auth/signup', status_code=201)
 def signup(data: AuthRequest):
     if data.role not in {'customer','worker'}: raise HTTPException(422,'Select Customer or Worker')
     with connection() as con:
         try:
-            cur=con.execute('INSERT INTO users(name,email,password_hash,role,created_at) VALUES(?,?,?,?,?)',(data.name,data.email.lower(),password_hash(data.password),data.role,datetime.now().isoformat()))
+            cur=con.execute('INSERT INTO users(name,email,password_hash,role,created_at) VALUES(?,?,?,?,?)',(data.name.strip(),data.email.lower().strip(),password_hash(data.password),data.role,datetime.now().isoformat()))
         except sqlite3.IntegrityError: raise HTTPException(409,'An account with this email already exists')
-        user_id=cur.lastrowid; token=secrets.token_urlsafe(24); con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',(token,user_id,datetime.now().isoformat()))
+        user_id=cur.lastrowid
+        if data.role == 'worker':
+            get_or_create_worker_for_user(con, user_id, data.name.strip())
+        token=secrets.token_urlsafe(24)
+        con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',(token,user_id,datetime.now().isoformat()))
     return {'token':token,'user':current_user(token)}
 
 @app.post('/auth/login')
 def login(data: LoginRequest):
-    found=rows('SELECT id FROM users WHERE email=? AND password_hash=?',(data.email.lower(),password_hash(data.password)))
+    found=rows('SELECT id, name, role, worker_id FROM users WHERE email=? AND password_hash=?',(data.email.lower().strip(),password_hash(data.password)))
     if not found: raise HTTPException(401,'Incorrect email or password')
+    user = found[0]
     token=secrets.token_urlsafe(24)
-    with connection() as con: con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',(token,found[0]['id'],datetime.now().isoformat()))
+    with connection() as con:
+        if user['role'] == 'worker' and not user['worker_id']:
+            get_or_create_worker_for_user(con, user['id'], user['name'])
+        con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',(token,user['id'],datetime.now().isoformat()))
     return {'token':token,'user':current_user(token)}
 
 @app.get('/auth/me')
