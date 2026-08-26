@@ -12,19 +12,14 @@ from recommendations import rank_workers, vtrust_score
 
 DB = Path(__file__).parent / "vconnect.db"
 
-# 1. Initialize the app exactly ONCE
 app = FastAPI(title="VConnect API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# 2. Mount static files (CSS/JS)
 app.mount("/static", StaticFiles(directory="."), name="static")
 
-# 3. Serve the index.html page on the main URL
 @app.get("/")
 def read_root():
     return FileResponse("index.html")
-
-# --- All your Pydantic Models and Database Logic ---
 
 class WorkerAvailabilityUpdate(BaseModel):
     available: int
@@ -70,16 +65,10 @@ class CommunityHelpCreate(BaseModel):
     requester_name: str = "Demo Customer"
 
 class AuthRequest(BaseModel):
-   #name: str = Field(min_length=2, max_length=80)
-    #email: str
-    #password: str = Field(min_length=6)
-    #role: str
-
     name: str = Field(min_length=2, max_length=80)
     email: str
     password: str = Field(min_length=6)
     role: str
-    # Add these new optional fields for workers:
     category: Optional[str] = "General"
     skills: Optional[str] = "General Services"
     experience: Optional[str] = "1 year"
@@ -98,7 +87,7 @@ def connection():
 def rows(query, args=()):
     with connection() as con: return [dict(r) for r in con.execute(query, args).fetchall()]
 
-"""def initialize():
+def initialize():
     with connection() as con:
         con.executescript('''
         CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY, name TEXT UNIQUE, icon TEXT, description TEXT);
@@ -123,22 +112,6 @@ def rows(query, args=()):
         if con.execute("SELECT count(*) FROM services").fetchone()[0]: return
         services=[('Plumbing','💧','Leaks, fittings and water systems'),('Electrical','⚡','Safe repairs and installations'),('Cleaning','✦','Home and deep cleaning'),('Carpentry','▦','Furniture and woodwork'),('Appliance Repair','◉','Care for essential appliances'),('Painting','◒','Fresh, thoughtful finishes'),('Home Tutoring','✎','Learning support nearby'),('Community Services','◎','Everyday local help')]
         con.executemany("INSERT INTO services(name,icon,description) VALUES(?,?,?)",services)
-        workers=[
-        ('Aarav Mehta','Plumbing','Leak repair · Pipe fitting · Water heaters',4.9,128,'9 years',450,1,1.2,'AM','Co-op founding member with a calm, meticulous approach.',28.6139,77.2090),
-        ('Nisha Iyer','Electrical','Wiring · Switchboards · Fan installation',4.8,96,'7 years',500,1,2.1,'NI','Certified electrician focused on safe, tidy work.',28.6210,77.2150),
-        ('Kabir Sharma','Cleaning','Deep cleaning · Kitchen care · Move-out',4.7,74,'5 years',350,1,1.8,'KS','A detail-first cleaner and cooperative mentor.',28.6090,77.2180),
-        ('Meera Joshi','Carpentry','Furniture repair · Shelves · Assembly',4.9,111,'10 years',550,1,3.4,'MJ','Custom woodwork with transparent estimates.',28.6300,77.2050),
-        ('Rohan Das','Appliance Repair','Washing machines · Refrigerators · AC',4.6,83,'6 years',600,1,2.8,'RD','Reliable diagnostics before repairs begin.',28.6020,77.2120),
-        ('Fatima Khan','Painting','Interior paint · Touch-ups · Colour advice',4.8,67,'8 years',480,0,4.6,'FK','Brings careful preparation and clean edges.',28.6420,77.2200),
-        ('Dev Patel','Home Tutoring','Maths · Science · Grades 6–10',4.9,52,'4 years',400,1,2.5,'DP','Patient local tutor who makes concepts stick.',28.6170,77.1980),
-        ('Sana Verma','Cleaning','Eco-cleaning · Organising · Laundry',4.7,88,'6 years',380,1,3.1,'SV','Low-waste cleaning for lived-in homes.',28.6260,77.2260),
-        ('Ishaan Roy','Plumbing','Drain cleaning · Fixtures · Water pumps',4.5,61,'5 years',420,1,5.2,'IR','Prompt, practical plumbing support.',28.6500,77.2000),
-        ('Priya Nair','Community Services','Elder support · Errands · Setup help',4.9,43,'5 years',300,1,2.9,'PN','Trusted neighbourly support for everyday needs.',28.6070,77.2010)]
-        con.executemany("INSERT INTO workers(name,category,skills,rating,reviews,experience,price,available,distance,avatar,bio,lat,lng) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",workers)
-        con.executemany("INSERT INTO memberships(worker_id,joined_at,contribution_percent) VALUES(?,?,?)",[(i,'2025-01-15',8) for i in range(1,11)])
-        con.executemany("INSERT INTO reviews(worker_id,customer,rating,text) VALUES(?,?,?,?)",[(1,'Kavya S.',5,'Aarav arrived on time and explained everything.'),(2,'Ritesh P.',5,'Neat work and genuinely helpful advice.'),(4,'Ananya K.',5,'Beautiful repair work, fairly priced.')])
-        demos=[(1,'Priya Shah','Plumbing','14 Garden Lane','2026-08-28','10:00','Kitchen tap is dripping','Accepted','2026-08-25'),(2,'Arjun Rao','Electrical','8 Lake View','2026-08-27','14:30','Ceiling fan noise','Pending','2026-08-25'),(3,'Demo Customer','Cleaning','22 Maple Street','2026-08-24','09:00','Deep clean','Completed','2026-08-20')]
-        con.executemany("INSERT INTO bookings(worker_id,customer_name,service,address,preferred_date,preferred_time,description,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)",demos) """
 
 @app.on_event('startup')
 def startup(): initialize()
@@ -194,19 +167,6 @@ def current_user(token: Optional[str]):
             user['worker_id'] = get_or_create_worker_for_user(con, user['id'], user['name'])
         return user
 
-"""@app.post('/auth/signup', status_code=201)
-def signup(data: AuthRequest):
-    if data.role not in {'customer','worker'}: raise HTTPException(422,'Select Customer or Worker')
-    with connection() as con:
-        try:
-            cur=con.execute('INSERT INTO users(name,email,password_hash,role,created_at) VALUES(?,?,?,?,?)',(data.name.strip(),data.email.lower().strip(),password_hash(data.password),data.role,datetime.now().isoformat()))
-        except sqlite3.IntegrityError: raise HTTPException(409,'An account with this email already exists')
-        user_id=cur.lastrowid
-        if data.role == 'worker':
-            get_or_create_worker_for_user(con, user_id, data.name.strip())
-        token=secrets.token_urlsafe(24)
-        con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',(token,user_id,datetime.now().isoformat()))
-    return {'token':token,'user':current_user(token)} """
 @app.post('/auth/signup', status_code=201)
 def signup(data: AuthRequest):
     if data.role not in {'customer','worker'}: raise HTTPException(422,'Select Customer or Worker')
@@ -275,10 +235,8 @@ def set_worker_availability(worker_id: int, data: WorkerAvailabilityUpdate):
 
 @app.post('/workers', status_code=201)
 def create_worker(data: WorkerCreate, token: Optional[str]=None, token_header: Optional[str]=Header(None, alias="token")):
-    """Demo onboarding: membership is automatically created on approval for this MVP."""
     auth_token = token or token_header
     initials=''.join(part[0].upper() for part in data.name.split()[:2]) or 'VC'
-    # Safe sample coordinates near the demo community; real deployments use verified addresses.
     with connection() as con:
         cur=con.execute('''INSERT INTO workers(name,category,skills,rating,reviews,experience,price,available,distance,avatar,bio,lat,lng,cooperative_member)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(data.name,data.category,data.skills,5.0,0,data.experience,data.price,1,3.0,initials,data.bio,28.6200,77.2100,1))
