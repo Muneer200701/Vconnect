@@ -70,10 +70,21 @@ class CommunityHelpCreate(BaseModel):
     requester_name: str = "Demo Customer"
 
 class AuthRequest(BaseModel):
+   """ name: str = Field(min_length=2, max_length=80)
+    email: str
+    password: str = Field(min_length=6)
+    role: str"""
+    class AuthRequest(BaseModel):
     name: str = Field(min_length=2, max_length=80)
     email: str
     password: str = Field(min_length=6)
     role: str
+    # Add these new optional fields for workers:
+    category: Optional[str] = "General"
+    skills: Optional[str] = "General Services"
+    experience: Optional[str] = "1 year"
+    price: Optional[int] = 300
+    bio: Optional[str] = "Cooperative member ready to work."
 
 class LoginRequest(BaseModel):
     email: str
@@ -87,7 +98,7 @@ def connection():
 def rows(query, args=()):
     with connection() as con: return [dict(r) for r in con.execute(query, args).fetchall()]
 
-def initialize():
+"""def initialize():
     with connection() as con:
         con.executescript('''
         CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY, name TEXT UNIQUE, icon TEXT, description TEXT);
@@ -127,7 +138,7 @@ def initialize():
         con.executemany("INSERT INTO memberships(worker_id,joined_at,contribution_percent) VALUES(?,?,?)",[(i,'2025-01-15',8) for i in range(1,11)])
         con.executemany("INSERT INTO reviews(worker_id,customer,rating,text) VALUES(?,?,?,?)",[(1,'Kavya S.',5,'Aarav arrived on time and explained everything.'),(2,'Ritesh P.',5,'Neat work and genuinely helpful advice.'),(4,'Ananya K.',5,'Beautiful repair work, fairly priced.')])
         demos=[(1,'Priya Shah','Plumbing','14 Garden Lane','2026-08-28','10:00','Kitchen tap is dripping','Accepted','2026-08-25'),(2,'Arjun Rao','Electrical','8 Lake View','2026-08-27','14:30','Ceiling fan noise','Pending','2026-08-25'),(3,'Demo Customer','Cleaning','22 Maple Street','2026-08-24','09:00','Deep clean','Completed','2026-08-20')]
-        con.executemany("INSERT INTO bookings(worker_id,customer_name,service,address,preferred_date,preferred_time,description,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)",demos)
+        con.executemany("INSERT INTO bookings(worker_id,customer_name,service,address,preferred_date,preferred_time,description,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)",demos) """
 
 @app.on_event('startup')
 def startup(): initialize()
@@ -183,7 +194,7 @@ def current_user(token: Optional[str]):
             user['worker_id'] = get_or_create_worker_for_user(con, user['id'], user['name'])
         return user
 
-@app.post('/auth/signup', status_code=201)
+"""@app.post('/auth/signup', status_code=201)
 def signup(data: AuthRequest):
     if data.role not in {'customer','worker'}: raise HTTPException(422,'Select Customer or Worker')
     with connection() as con:
@@ -193,6 +204,28 @@ def signup(data: AuthRequest):
         user_id=cur.lastrowid
         if data.role == 'worker':
             get_or_create_worker_for_user(con, user_id, data.name.strip())
+        token=secrets.token_urlsafe(24)
+        con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',(token,user_id,datetime.now().isoformat()))
+    return {'token':token,'user':current_user(token)} """
+@app.post('/auth/signup', status_code=201)
+def signup(data: AuthRequest):
+    if data.role not in {'customer','worker'}: raise HTTPException(422,'Select Customer or Worker')
+    with connection() as con:
+        try:
+            cur=con.execute('INSERT INTO users(name,email,password_hash,role,created_at) VALUES(?,?,?,?,?)',(data.name.strip(),data.email.lower().strip(),password_hash(data.password),data.role,datetime.now().isoformat()))
+        except sqlite3.IntegrityError: raise HTTPException(409,'An account with this email already exists')
+        user_id=cur.lastrowid
+        
+        # If they are a worker, save all their specific profile details!
+        if data.role == 'worker':
+            initials = ''.join(part[0].upper() for part in data.name.strip().split()[:2]) or 'VC'
+            cur_worker = con.execute('''INSERT INTO workers(name, category, skills, rating, reviews, experience, price, available, distance, avatar, bio, lat, lng, cooperative_member)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (data.name.strip(), data.category, data.skills, 5.0, 0, data.experience, data.price, 1, 2.0, initials, data.bio, 28.6200, 77.2100, 1))
+            worker_id = cur_worker.lastrowid
+            con.execute('INSERT INTO memberships(worker_id, joined_at, contribution_percent) VALUES(?, ?, ?)', (worker_id, datetime.now().date().isoformat(), 8))
+            con.execute('UPDATE users SET worker_id=? WHERE id=?', (worker_id, user_id))
+            
         token=secrets.token_urlsafe(24)
         con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',(token,user_id,datetime.now().isoformat()))
     return {'token':token,'user':current_user(token)}
