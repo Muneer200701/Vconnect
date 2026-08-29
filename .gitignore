@@ -1,0 +1,25 @@
+# Python environment — rebuild with: python -m venv .venv
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Rollback copies taken before edits; git history replaces these
+.backup/
+.backup2/
+
+# vconnect.db IS tracked on purpose: it carries the seeded demo workers,
+# ratings and reviews, so a fresh clone can be demoed immediately. The trade-off
+# is that two people running the app will get conflicts on this file. If that
+# starts to bite, add `vconnect.db` here and run:
+#   git rm --cached vconnect.db
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

@@ -62,7 +62,7 @@ async function getWorkerProfile() {
   };
 }
 
-const CUSTOMER_ROUTES = new Set(['customer', 'emergency', 'groups', 'track']);
+const CUSTOMER_ROUTES = new Set(['customer', 'emergency', 'groups', 'track', 'estimate']);
 const WORKER_ROUTES = new Set(['provider', 'jobs', 'availability', 'earnings', 'join']);
 
 async function api(path, opts = {}) {
@@ -79,6 +79,121 @@ async function api(path, opts = {}) {
     throw new Error(msg || 'Something went wrong');
   }
   return r.json();
+}
+
+/* ─── Location ─── */
+// The seeded demo professionals all live around this point in New Delhi.
+const DEMO_ORIGIN = { lat: 28.617, lng: 77.21 };
+let userLocation = null;        // { lat, lng, accuracy }
+let locationState = 'unknown';  // unknown | asking | granted | denied | unavailable
+
+(function restoreLocation() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('vconnectLocation') || 'null');
+    if (saved && typeof saved.lat === 'number' && typeof saved.lng === 'number') {
+      userLocation = saved;
+      locationState = 'granted';
+    }
+  } catch {}
+})();
+
+function requestUserLocation(force = false) {
+  return new Promise(resolve => {
+    if (userLocation && !force) return resolve(userLocation);
+    if (!navigator.geolocation) { locationState = 'unavailable'; return resolve(null); }
+    locationState = 'asking';
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+        locationState = 'granted';
+        try { localStorage.setItem('vconnectLocation', JSON.stringify(userLocation)); } catch {}
+        resolve(userLocation);
+      },
+      err => { locationState = err.code === 1 ? 'denied' : 'unavailable'; resolve(null); },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+    );
+  });
+}
+
+function haversineKm(a, b) {
+  const R = 6371, rad = d => d * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Demo profiles are all seeded in New Delhi. Once we know where the user really
+// is, shift the whole cluster by that offset so the map stays meaningful
+// wherever they are, keeping each worker's relative position intact.
+function workerPosition(w) {
+  if (!w || typeof w.lat !== 'number' || typeof w.lng !== 'number') return null;
+  if (!userLocation) return { lat: w.lat, lng: w.lng };
+  return {
+    lat: w.lat - DEMO_ORIGIN.lat + userLocation.lat,
+    lng: w.lng - DEMO_ORIGIN.lng + userLocation.lng
+  };
+}
+
+function workerDistanceKm(w) {
+  const pos = workerPosition(w);
+  if (!pos || !userLocation) return typeof w?.distance === 'number' ? w.distance : null;
+  return haversineKm(userLocation, pos);
+}
+
+function formatKm(km) {
+  if (km === null || km === undefined || isNaN(km)) return '—';
+  return km < 1 ? Math.round(km * 1000) + ' m' : km.toFixed(1) + ' km';
+}
+
+function workerDistanceLabel(w) { return formatKm(workerDistanceKm(w)); }
+
+function locationBar() {
+  if (locationState === 'granted' && userLocation) {
+    return `<div class="location-bar granted">
+      <span class="loc-dot"></span>
+      <div class="loc-text"><b>Showing professionals near you</b>
+      <p class="muted">Distances measured from your current location. Demo profiles are positioned around you.</p></div>
+      <button class="btn small ghost" id="refreshLocation">Update location</button>
+    </div>`;
+  }
+  if (locationState === 'asking') {
+    return `<div class="location-bar asking"><span class="loc-dot"></span>
+      <div class="loc-text"><b>Finding your location…</b><p class="muted">Allow location access in your browser prompt.</p></div></div>`;
+  }
+  const why = locationState === 'denied'
+    ? 'Location access was blocked, so we are showing the default area. You can re-allow it from your browser address bar.'
+    : locationState === 'unavailable'
+      ? 'Your browser could not provide a location, so we are showing the default area.'
+      : 'Share your location to see who is genuinely closest to you.';
+  return `<div class="location-bar prompt">
+    <span class="loc-dot muted-dot"></span>
+    <div class="loc-text"><b>Find help near you</b><p class="muted">${why}</p></div>
+    <button class="btn small lime" id="askLocation">Use my location</button>
+  </div>`;
+}
+
+function renderLocationBar() {
+  const holder = $('#locationBar');
+  if (!holder) return;
+  holder.innerHTML = locationBar();
+  $('#askLocation')?.addEventListener('click', async () => {
+    renderLocationBarAsking();
+    await requestUserLocation(true);
+    renderLocationBar();
+    if (typeof loadWorkers === 'function' && $('#workerResults')) loadWorkers();
+  });
+  $('#refreshLocation')?.addEventListener('click', async () => {
+    renderLocationBarAsking();
+    await requestUserLocation(true);
+    renderLocationBar();
+    if (typeof loadWorkers === 'function' && $('#workerResults')) loadWorkers();
+  });
+}
+
+function renderLocationBarAsking() {
+  locationState = 'asking';
+  const holder = $('#locationBar');
+  if (holder) holder.innerHTML = locationBar();
 }
 
 /* ─── Icons (inline SVG) ─── */
@@ -104,7 +219,10 @@ const icons = {
   lock: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
   arrowRight: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
   check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>',
-  star: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
+  star: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+  estimate: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 10h8M8 14h4"/></svg>',
+  chat: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
+  globe: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>'
 };
 
 
@@ -124,6 +242,7 @@ function roleNavItems() {
       navLink('#/services', 'Services', icons.services, 'services'),
       navLink('#/customer', 'My Bookings', icons.bookings, 'customer'),
       navLink('#/track', 'Track Booking', icons.track, 'track'),
+      navLink('#/estimate', 'Price Estimate', icons.estimate, 'estimate'),
       navLink('#/notifications', 'Notifications', icons.bell, 'notifications'),
       navLink('#/profile', 'Profile', icons.user, 'profile'),
       navLink('#/help', 'Help', icons.help, 'help')
@@ -188,7 +307,7 @@ function workerCard(w) {
     <div class="worker-head"><div class="avatar">${w.avatar}</div><div><h3>${esc(w.name)}</h3><span class="badge">✓ Co-op member</span></div></div>
     <p>${esc(w.category)} · ${esc(w.experience)}</p>
     <div><span class="rating">★ ${w.rating}</span> <span class="muted">(${w.reviews || 0} reviews)</span></div>
-    <p><span class="badge">VTrust ${w.vtrust_score || '—'}/100</span> <span class="badge">Local Match · ${w.distance} km</span></p>
+    <p><span class="badge">VTrust ${w.vtrust_score || '—'}/100</span> <span class="badge">Local Match · ${workerDistanceLabel(w)}</span></p>
     <div class="worker-meta"><span>Reduced travel · supports local work</span><strong>₹${w.price}/visit</strong></div>
     ${w.score ? `<p class="badge match-badge">Best Match · ${w.score}/100</p>` : ''}
     <div class="worker-actions"><a class="btn small ghost" href="#/worker/${w.id}">View profile</a>${bookBtn}</div>
@@ -200,12 +319,16 @@ function bookingList(items, mode) {
   return `<div class="table-list">${items.map(b => `<article class="card booking animate-up">
     <div class="avatar">${b.avatar}</div>
     <div class="booking-info"><b>${esc(b.service)} with ${esc(b.worker_name)}</b><div class="muted">${b.preferred_date} · ${b.preferred_time}<br>${esc(b.address)}</div></div>
-    <span class="status ${b.status.replace(/\s/g, '-')}">${b.status}</span>
+    <span class="status ${statusClass(b.status)}">${esc(b.status)}</span>
+    ${['Pending', 'Accepted', 'In Progress'].includes(b.status) ? `<a class="btn small ghost" href="#/chat/booking-${b.id}" title="Message without sharing your number">${icons.chat}<span>Message</span></a>` : ''}
     ${mode === 'customer' && ['Pending', 'Accepted'].includes(b.status) ? `<button class="btn small ghost" onclick="changeStatus(${b.id},'Cancelled')">Cancel</button>` : ''}
     ${mode === 'provider' && b.status === 'Pending' ? `<button class="btn small lime" onclick="changeStatus(${b.id},'Accepted')">Accept</button><button class="btn small ghost" onclick="changeStatus(${b.id},'Rejected')">Decline</button>` : ''}
     ${mode === 'provider' && b.status === 'Accepted' ? `<button class="btn small lime" onclick="changeStatus(${b.id},'Completed')">Complete</button>` : ''}
   </article>`).join('')}</div>`;
 }
+
+// Status strings arrive with spaces ("In Progress"); CSS needs a single class.
+function statusClass(status) { return String(status || '').replace(/\s+/g, '-'); }
 
 function statCard(label, value, accent) {
   return `<div class="stat ${accent || ''}"><span>${label}</span><b>${value}</b></div>`;
@@ -390,6 +513,66 @@ function authWelcome() {
   </main>`;
 }
 
+/* ─── Google Sign-In ─── */
+let googleClientId = null;          // filled from /auth/config
+let googleConfigLoaded = false;
+
+async function loadGoogleConfig() {
+  if (googleConfigLoaded) return googleClientId;
+  googleConfigLoaded = true;
+  try {
+    const cfg = await api('/auth/config');
+    googleClientId = (cfg.google_client_id || '').trim() || null;
+  } catch { googleClientId = null; }
+  return googleClientId;
+}
+
+// Called by Google Identity Services once the user picks an account.
+window.handleGoogleCredential = async function (response) {
+  const role = selectedRole || localStorage.getItem('vconnectRole') || 'customer';
+  const notice = $('#authNotice');
+  if (notice) notice.innerHTML = '<div class="alert info">Signing you in with Google…</div>';
+  try {
+    const r = await api('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ credential: response.credential, role })
+    });
+    if (r.user.role !== role) {
+      throw new Error('This Google account is registered as a ' + r.user.role + '. Please switch roles and try again.');
+    }
+    localStorage.setItem('vconnectSession', JSON.stringify(r));
+    location.hash = r.user.role === 'worker' ? '#/provider' : '#/';
+    guardedMount();
+  } catch (err) {
+    if (notice) notice.innerHTML = `<div class="alert error">${esc(err.message)}</div>`;
+  }
+};
+
+// Renders the real Google button into #googleBtn once the GIS script is ready.
+async function mountGoogleButton() {
+  const holder = $('#googleSignIn');
+  if (!holder) return;
+  const clientId = await loadGoogleConfig();
+  if (!clientId) { holder.innerHTML = ''; return; }          // not configured → stay hidden
+  if (!window.google?.accounts?.id) {                         // GIS still loading → retry
+    return void setTimeout(mountGoogleButton, 300);
+  }
+  const target = $('#googleBtn');
+  if (!target) return;
+  try {
+    google.accounts.id.initialize({ client_id: clientId, callback: window.handleGoogleCredential });
+    target.innerHTML = '';
+    google.accounts.id.renderButton(target, {
+      theme: 'outline', size: 'large', width: 320,
+      text: window.isLoginMode ? 'signin_with' : 'signup_with'
+    });
+    holder.classList.remove('hidden');
+  } catch (err) {
+    console.warn('Google sign-in unavailable:', err);
+    holder.innerHTML = '';
+  }
+}
+
 window.isLoginMode = false;
 
 window.toggleAuthMode = function(mode) { 
@@ -403,10 +586,12 @@ window.togglePassword = function() {
     const eye = document.getElementById('eyeIcon');
     if (pwd && pwd.type === 'password') {
         pwd.type = 'text';
+        eye.closest('button')?.setAttribute('aria-label', 'Hide password');
         // Change to "eye-off" icon
         eye.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>';
     } else if (pwd) {
         pwd.type = 'password';
+        eye.closest('button')?.setAttribute('aria-label', 'Show password');
         // Change back to regular "eye" icon
         eye.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
     }
@@ -449,7 +634,7 @@ function chooseRole(role) {
     </div>
     
     <!-- Sign Up / Log In Tabs -->
-    <div class="auth-toggle-tabs" style="display: flex; gap: 10px; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #eee;">
+    <div class="auth-toggle-tabs">
         <button type="button" class="btn ${!window.isLoginMode ? 'lime' : 'ghost'} btn-block" onclick="toggleAuthMode('signup')">Sign Up</button>
         <button type="button" class="btn ${window.isLoginMode ? 'lime' : 'ghost'} btn-block" onclick="toggleAuthMode('login')">Log In</button>
     </div>
@@ -474,9 +659,9 @@ function chooseRole(role) {
         
         <!-- 2. Updated Password Field with Eye Icon -->
         <label>Password
-          <div class="input-wrapper" style="position: relative; display: flex; align-items: center;">
-            <input required type="password" id="authPassword" minlength="6" name="password" placeholder="At least 6 characters" autocomplete="current-password" style="width: 100%; padding-right: 40px;">
-            <button type="button" onclick="togglePassword()" style="position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: #888; padding: 5px; display: flex; justify-content: center; align-items: center;" aria-label="Toggle password visibility">
+          <div class="input-wrapper password-field">
+            <input required type="password" id="authPassword" minlength="6" name="password" placeholder="At least 6 characters" autocomplete="current-password">
+            <button type="button" class="password-toggle" onclick="togglePassword()" aria-label="Show password">
                 <svg id="eyeIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                     <circle cx="12" cy="12" r="3"></circle>
@@ -522,10 +707,16 @@ function chooseRole(role) {
           Switch to ${role === 'customer' ? 'Worker' : 'Customer'} instead →
         </button>
       </div>
+      <div id="googleSignIn" class="google-signin hidden">
+        <div class="auth-divider"><span>or</span></div>
+        <div id="googleBtn" class="google-btn-holder"></div>
+      </div>
+
       <div id="authNotice"></div>
     </form>
   </div>`;
   $('#authForm')?.addEventListener('submit', handleAuthSubmit);
+  mountGoogleButton();
 }
 
 async function handleAuthSubmit(e) {
@@ -634,7 +825,7 @@ async function customerDashboard() {
         ${upcoming ? `<article class="card booking-highlight">
           <div class="avatar">${upcoming.avatar}</div>
           <div><b>${esc(upcoming.service)}</b><p class="muted">${esc(upcoming.worker_name)} · ${upcoming.preferred_date} at ${upcoming.preferred_time}</p></div>
-          <span class="status ${upcoming.status}">${upcoming.status}</span>
+          <span class="status ${statusClass(upcoming.status)}">${esc(upcoming.status)}</span>
           <a class="btn small ghost" href="#/track">Track →</a>
         </article>` : '<div class="empty-state compact"><p>No upcoming bookings. <a href="#/services">Book a service</a></p></div>'}
       </section>
@@ -647,6 +838,7 @@ async function customerDashboard() {
           <a class="quick-action" href="#/groups">${icons.jobs}<span>Group booking</span></a>
           <a class="quick-action" href="#/community">${icons.help}<span>Community help</span></a>
           <a class="quick-action" href="#/cooperative">${icons.dashboard}<span>Co-op info</span></a>
+          <a class="quick-action" href="#/estimate">${icons.estimate}<span>Price estimate</span></a>
         </div>
       </section>
     </div>
@@ -727,7 +919,7 @@ async function services() {
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   let cat = params.get('category') || 'All';
   const all = await api('/services');
-  return `<main class="page page-enter"><span class="eyebrow">Find your local expert</span><h1 class="page-title">Services & professionals</h1><p class="lead">Compare trusted co-op members by skill, availability and location.</p><div class="filterbar"><input id="workerSearch" placeholder="Search skills, names or services"><select id="categoryFilter"><option>All</option>${all.map(s => `<option ${s.name === cat ? 'selected' : ''}>${s.name}</option>`).join('')}</select><label class="toggle-chip"><input id="availableFilter" type="checkbox"><span>Available now</span></label></div><div id="workerResults" class="grid worker-grid"><div class="skeleton-grid">${[1, 2, 3].map(() => '<div class="skeleton-card"></div>').join('')}</div></div><div id="workerMap" class="map"></div></main>`;
+  return `<main class="page page-enter"><span class="eyebrow">Find your local expert</span><h1 class="page-title">Services & professionals</h1><p class="lead">Compare trusted co-op members by skill, availability and location.</p><div id="locationBar"></div><div class="filterbar"><input id="workerSearch" placeholder="Search skills, names or services"><select id="categoryFilter"><option>All</option>${all.map(s => `<option ${s.name === cat ? 'selected' : ''}>${s.name}</option>`).join('')}</select><label class="toggle-chip"><input id="availableFilter" type="checkbox"><span>Available now</span></label></div><div id="workerResults" class="grid worker-grid"><div class="skeleton-grid">${[1, 2, 3].map(() => '<div class="skeleton-card"></div>').join('')}</div></div><div id="workerMap" class="map"></div></main>`;
 }
 
 async function loadWorkers() {
@@ -737,6 +929,7 @@ async function loadWorkers() {
   if (cat !== 'All') p.set('category', cat);
   if (available) p.set('available', 'true');
   const workers = await api('/workers?' + p);
+  if (userLocation) workers.sort((a, b) => (workerDistanceKm(a) ?? 1e9) - (workerDistanceKm(b) ?? 1e9));
   $('#workerResults').innerHTML = workers.length ? workers.map(workerCard).join('') : `<div class="empty-state"><h3>No matching professionals</h3><p>Try another service or search term.</p></div>`;
   renderMap(workers);
 }
@@ -745,7 +938,7 @@ async function profile(id) {
   const w = await api('/workers/' + id);
   const showBooking = isCustomer();
   const todayStr = new Date().toISOString().split('T')[0];
-  return `<main class="page page-enter"><a href="#/services" class="back-link">← All professionals</a><div class="profile"><section class="profile-pane"><div class="worker-head"><div class="avatar lg">${esc(w.avatar || 'VC')}</div><div><h1 class="page-title sm">${esc(w.name)}</h1><span class="badge">✓ Verified cooperative member</span></div></div><p class="lead">${esc(w.bio)}</p><p><b>${esc(w.category)}</b><br><span class="muted">${esc(w.skills)}</span></p><div class="grid stats triple"><div class="stat"><span>Rating</span><b>★ ${w.rating}</b></div><div class="stat"><span>Experience</span><b>${esc(w.experience)}</b></div><div class="stat"><span>Distance</span><b>${w.distance} km</b></div></div><h3>Neighbour reviews</h3>${(w.reviews_list || []).map(r => `<p class="card review-card"><b>★ ${r.rating} · ${esc(r.customer)}</b><br>${esc(r.text)}</p>`).join('') || '<p class="muted">New to VConnect reviews, but fully verified.</p>'}</section><section class="profile-pane">${showBooking ? `<span class="eyebrow">₹${w.price}/visit · ${w.available ? 'Available today' : 'Limited availability'}</span><h2>Request a booking</h2><form class="form" id="bookingForm"><label>Your address<input required name="address" placeholder="e.g. 14 Garden Lane, New Delhi"></label><div class="form-grid"><label>Preferred date<input required type="date" name="preferred_date" min="${todayStr}" value="${todayStr}"></label><label>Preferred time<input required type="time" name="preferred_time"></label></div><label>Tell ${esc(w.name.split(' ')[0])} about the task<textarea name="description" placeholder="A few helpful details (optional)"></textarea></label><button class="btn lime btn-block">Send booking request</button><div id="bookingNotice"></div></form>` : `<h2>Professional profile</h2><p class="lead">This is a marketplace profile. Manage your own bookings from the <a href="#/provider">Worker Dashboard</a>.</p><div class="grid stats triple"><div class="stat"><span>Price</span><b>₹${w.price}/visit</b></div><div class="stat"><span>VTrust</span><b>${w.vtrust_score || '—'}/100</b></div><div class="stat"><span>Status</span><b>${w.available ? 'Available' : 'Busy'}</b></div></div>`}<div id="profileMap" class="map"></div></section></div></main>`;
+  return `<main class="page page-enter"><a href="#/services" class="back-link">← All professionals</a><div class="profile"><section class="profile-pane"><div class="worker-head"><div class="avatar lg">${esc(w.avatar || 'VC')}</div><div><h1 class="page-title sm">${esc(w.name)}</h1><span class="badge">✓ Verified cooperative member</span></div></div><p class="lead">${esc(w.bio)}</p><p><b>${esc(w.category)}</b><br><span class="muted">${esc(w.skills)}</span></p><div class="grid stats triple"><div class="stat"><span>Rating</span><b>★ ${w.rating}</b></div><div class="stat"><span>Experience</span><b>${esc(w.experience)}</b></div><div class="stat"><span>Distance</span><b>${workerDistanceLabel(w)}</b></div></div><h3>Neighbour reviews</h3>${(w.reviews_list || []).map(r => `<p class="card review-card"><b>★ ${r.rating} · ${esc(r.customer)}</b><br>${esc(r.text)}</p>`).join('') || '<p class="muted">New to VConnect reviews, but fully verified.</p>'}</section><section class="profile-pane">${showBooking ? `<span class="eyebrow">₹${w.price}/visit · ${w.available ? 'Available today' : 'Limited availability'}</span><h2>Request a booking</h2><form class="form" id="bookingForm"><label>Your address<input required name="address" placeholder="e.g. 14 Garden Lane, New Delhi"></label><div class="form-grid"><label>Preferred date<input required type="date" name="preferred_date" min="${todayStr}" value="${todayStr}"></label><label>Preferred time<input required type="time" name="preferred_time"></label></div><label>Tell ${esc(w.name.split(' ')[0])} about the task<textarea name="description" placeholder="A few helpful details (optional)"></textarea></label><button class="btn lime btn-block">Send booking request</button><div id="bookingNotice"></div></form>` : `<h2>Professional profile</h2><p class="lead">This is a marketplace profile. Manage your own bookings from the <a href="#/provider">Worker Dashboard</a>.</p><div class="grid stats triple"><div class="stat"><span>Price</span><b>₹${w.price}/visit</b></div><div class="stat"><span>VTrust</span><b>${w.vtrust_score || '—'}/100</b></div><div class="stat"><span>Status</span><b>${w.available ? 'Available' : 'Busy'}</b></div></div>`}<div id="profileMap" class="map"></div></section></div></main>`;
 }
 
 async function customer() {
@@ -759,7 +952,7 @@ async function trackBooking() {
   return `<main class="page page-enter"><span class="eyebrow">Booking tracker</span><h1 class="page-title">Track your bookings</h1><p class="lead">Real-time status for every service request you've made.</p>
   ${items.length ? items.map(b => {
     const idx = steps.indexOf(b.status === 'Cancelled' || b.status === 'Rejected' ? 'Pending' : b.status);
-    return `<article class="card track-card animate-up"><div class="track-header"><div class="avatar">${b.avatar}</div><div><b>${esc(b.service)}</b><p class="muted">${esc(b.worker_name)} · ${b.preferred_date} at ${b.preferred_time}</p></div><span class="status ${b.status}">${b.status}</span></div>
+    return `<article class="card track-card animate-up"><div class="track-header"><div class="avatar">${b.avatar}</div><div><b>${esc(b.service)}</b><p class="muted">${esc(b.worker_name)} · ${b.preferred_date} at ${b.preferred_time}</p></div><span class="status ${statusClass(b.status)}">${esc(b.status)}</span></div>
     <div class="track-steps">${steps.map((s, i) => `<div class="track-step ${i <= idx ? 'done' : ''} ${b.status === 'Cancelled' || b.status === 'Rejected' ? 'cancelled' : ''}"><span class="step-dot"></span><span>${s}</span></div>`).join('')}</div>
     <p class="muted track-address">${esc(b.address)}</p></article>`;
   }).join('') : '<div class="empty-state"><h3>No bookings to track</h3><p>Book a service to start tracking.</p><a class="btn lime" href="#/services">Find services</a></div>'}
@@ -796,7 +989,7 @@ async function availabilityPage() {
   const worker = await getWorkerProfile();
   return `<main class="page page-enter"><span class="eyebrow">Availability · ${esc(worker.name)}</span><h1 class="page-title">Your availability</h1><p class="lead">Let customers know when you're ready to take on new work.</p>
   <div class="profile-pane availability-card"><div class="availability-status ${worker.available ? 'online' : 'offline'}"><span class="status-dot"></span><div><h2>${worker.available ? 'You are available' : 'You are unavailable'}</h2><p class="muted">${worker.available ? 'Customers can book you for today.' : 'You won\'t appear in "available now" searches.'}</p></div></div><button class="btn lime btn-block" id="toggleAvailability">${worker.available ? 'Mark as unavailable' : 'Mark as available'}</button></div>
-  <div class="profile-pane" style="margin-top:20px"><h3>Schedule tips</h3><ul class="help-list"><li>Keep your availability updated daily for better matches.</li><li>Respond to pending requests within 2 hours when possible.</li><li>High VTrust scores lead to more customer bookings.</li></ul></div></main>`;
+  <div class="profile-pane stack-top"><h3>Schedule tips</h3><ul class="help-list"><li>Keep your availability updated daily for better matches.</li><li>Respond to pending requests within 2 hours when possible.</li><li>High VTrust scores lead to more customer bookings.</li></ul></div></main>`;
 }
 
 async function earningsPage() {
@@ -819,8 +1012,8 @@ async function profilePage() {
   return `<main class="page page-enter"><span class="eyebrow">Your profile</span><h1 class="page-title">Profile</h1>
   <div class="profile"><section class="profile-pane"><div class="profile-hero"><div class="avatar xl">${user.name.split(' ').map(n => n[0]).join('').slice(0, 2)}</div><div><h2>${esc(user.name)}</h2><span class="role-badge ${user.role}">${roleLabel}</span><p class="muted">${esc(user.email)}</p></div></div></section>
   <section class="profile-pane"><h3>Account details</h3><div class="detail-row"><span>Name</span><b>${esc(user.name)}</b></div><div class="detail-row"><span>Email</span><b>${esc(user.email)}</b></div><div class="detail-row"><span>Role</span><b>${roleLabel}</b></div>
-  ${isCustomer() ? '<p class="muted" style="margin-top:20px">As a customer, you can book services, track bookings, and join community programs.</p>' : '<p class="muted" style="margin-top:20px">As a worker, you can manage jobs, set availability, and track earnings from the cooperative platform.</p>'}
-  <button class="btn ghost" style="margin-top:20px" onclick="logoutUser()">Sign out</button></section></div></main>`;
+  ${isCustomer() ? '<p class="muted stack-top">As a customer, you can book services, track bookings, and join community programs.</p>' : '<p class="muted stack-top">As a worker, you can manage jobs, set availability, and track earnings from the cooperative platform.</p>'}
+  <button class="btn ghost stack-top" onclick="logoutUser()">Sign out</button></section></div></main>`;
 }
 
 async function notificationsPage() {
@@ -838,12 +1031,12 @@ async function helpPage() {
     : [['How do I accept jobs?', 'Go to Dashboard or Assigned Jobs. Pending requests can be accepted or declined.'], ['How do I update availability?', 'Use the Availability page to toggle whether customers can book you today.'], ['How are earnings calculated?', 'You receive 92% of each completed job. 8% supports the cooperative.'], ['What is VTrust?', 'Your trust score reflects ratings, completed jobs, on-time record, and co-op membership.']];
   return `<main class="page page-enter"><span class="eyebrow">Help & Support</span><h1 class="page-title">Help & Support</h1><p class="lead">${isCustomer() ? 'Customer' : 'Worker'} support — we're here to help.</p>
   <div class="profile"><section class="profile-pane"><h2>Frequently asked questions</h2>${faqs.map(([q, a]) => `<details class="faq-item"><summary>${q}</summary><p class="muted">${a}</p></details>`).join('')}</section>
-  <section class="profile-pane"><h2>Contact support</h2><form class="form" id="helpForm"><label>Subject<input required placeholder="How can we help?"></label><label>Message<textarea required placeholder="Describe your issue…"></textarea></label><button class="btn lime btn-block">Send message</button><div id="helpNotice"></div></form><p class="muted" style="margin-top:16px">Demo MVP — messages are not sent to a live support team.</p></section></div></main>`;
+  <section class="profile-pane"><h2>Contact support</h2><form class="form" id="helpForm"><label>Subject<input required placeholder="How can we help?"></label><label>Message<textarea required placeholder="Describe your issue…"></textarea></label><button class="btn lime btn-block">Send message</button><div id="helpNotice"></div></form><p class="muted stack-top-sm">Demo MVP — messages are not sent to a live support team.</p></section></div></main>`;
 }
 
 async function coop() {
   const d = await api('/admin/summary');
-  return `<main class="page page-enter"><span class="eyebrow">Cooperative dashboard</span><h1 class="page-title">A platform the community owns.</h1><p class="lead">VConnect keeps earnings visible and returns value to the people creating it.</p><div class="grid stats" style="margin-top:30px">${statCard('Co-op members', d.members)}${statCard('Active workers', d.active_workers)}${statCard('Completed services', d.completed_services)}${statCard('Community earnings', '₹' + d.community_earnings.toLocaleString(), 'accent-lime')}</div><div class="profile"><section class="profile-pane"><h2>Transparent by design</h2><p class="lead">${d.commission}</p><div class="card"><b>Customer payment → Worker earnings → Cooperative contribution</b><p class="muted">The 8% contribution is recorded for training, member support, and local community programs.</p></div></section><section class="profile-pane"><h2>Our members</h2>${d.members_list.map(m => `<p class="booking member-row"><span class="avatar">${m.avatar}</span><span class="booking-info"><b>${esc(m.name)}</b><br><span class="muted">${esc(m.category)} · ★ ${m.rating}</span></span></p>`).join('')}</section></div></main>`;
+  return `<main class="page page-enter"><span class="eyebrow">Cooperative dashboard</span><h1 class="page-title">A platform the community owns.</h1><p class="lead">VConnect keeps earnings visible and returns value to the people creating it.</p><div class="grid stats stack-top-lg">${statCard('Co-op members', d.members)}${statCard('Active workers', d.active_workers)}${statCard('Completed services', d.completed_services)}${statCard('Community earnings', '₹' + d.community_earnings.toLocaleString(), 'accent-lime')}</div><div class="profile"><section class="profile-pane"><h2>Transparent by design</h2><p class="lead">${d.commission}</p><div class="card"><b>Customer payment → Worker earnings → Cooperative contribution</b><p class="muted">The 8% contribution is recorded for training, member support, and local community programs.</p></div></section><section class="profile-pane"><h2>Our members</h2>${d.members_list.map(m => `<p class="booking member-row"><span class="avatar">${m.avatar}</span><span class="booking-info"><b>${esc(m.name)}</b><br><span class="muted">${esc(m.category)} · ★ ${m.rating}</span></span></p>`).join('')}</section></div></main>`;
 }
 
 async function join() {
@@ -853,7 +1046,7 @@ async function join() {
 
 async function emergency() {
   const workers = await api('/workers/recommended?emergency=true');
-  return `<main class="page page-enter"><span class="eyebrow emergency-badge">High-priority support</span><h1 class="page-title">Emergency service</h1><p class="lead">For water leaks, power failures, electrical hazards, or urgent appliance issues.</p><div class="profile"><section class="profile-pane"><h2>Nearby emergency matches</h2>${workers.map(w => `<p class="card emergency-worker"><b>${esc(w.name)} · ${esc(w.category)}</b><br><span class="badge">VTrust ${w.vtrust_score}/100</span> <span class="muted">${w.distance} km · ₹${w.price}/visit</span><br><button class="btn small lime" onclick="selectEmergency(${w.id},'${esc(w.category)}')">Select worker</button></p>`).join('')}</section><section class="profile-pane"><h2>Send urgent request</h2><form class="form" id="emergencyForm"><input type="hidden" name="worker_id" id="emWorker"><input type="hidden" name="service" id="emService"><label>Emergency type<select required name="emergency_type"><option>Water leakage</option><option>Electrical emergency</option><option>Power failure</option><option>Urgent appliance issue</option></select></label><label>Service location<input required name="address" placeholder="Your address or community"></label><label>Details<textarea name="description" placeholder="Tell the worker what happened"></textarea></label><button class="btn coral btn-block">Send high-priority request</button><div id="emergencyNotice"></div></form></section></div></main>`;
+  return `<main class="page page-enter"><span class="eyebrow emergency-badge">High-priority support</span><h1 class="page-title">Emergency service</h1><p class="lead">For water leaks, power failures, electrical hazards, or urgent appliance issues.</p><div class="profile"><section class="profile-pane"><h2>Nearby emergency matches</h2>${workers.map(w => `<p class="card emergency-worker"><b>${esc(w.name)} · ${esc(w.category)}</b><br><span class="badge">VTrust ${w.vtrust_score}/100</span> <span class="muted">${workerDistanceLabel(w)} · ₹${w.price}/visit</span><br><button class="btn small lime" onclick="selectEmergency(${w.id},'${esc(w.category)}')">Select worker</button></p>`).join('')}</section><section class="profile-pane"><h2>Send urgent request</h2><form class="form" id="emergencyForm"><input type="hidden" name="worker_id" id="emWorker"><input type="hidden" name="service" id="emService"><label>Emergency type<select required name="emergency_type"><option>Water leakage</option><option>Electrical emergency</option><option>Power failure</option><option>Urgent appliance issue</option></select></label><label>Service location<input required name="address" placeholder="Your address or community"></label><label>Details<textarea name="description" placeholder="Tell the worker what happened"></textarea></label><button class="btn coral btn-block">Send high-priority request</button><div id="emergencyNotice"></div></form></section></div></main>`;
 }
 
 async function groups() {
@@ -879,17 +1072,33 @@ function renderMap(workers) {
     el._map = null;
   }
   try {
-    const map = L.map(el).setView([28.617, 77.21], 13);
+    const centre = userLocation ? [userLocation.lat, userLocation.lng] : [DEMO_ORIGIN.lat, DEMO_ORIGIN.lng];
+    const map = L.map(el).setView(centre, userLocation ? 14 : 13);
     el._map = map;
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
-    L.marker([28.617, 77.21]).addTo(map).bindPopup('Your sample service location');
-    if (Array.isArray(workers)) {
-      workers.forEach(w => {
-        if (w && typeof w.lat === 'number' && typeof w.lng === 'number') {
-          L.marker([w.lat, w.lng]).addTo(map).bindPopup(`<b>${esc(w.name)}</b><br>${esc(w.category)} · ${w.distance || 0} km`);
-        }
-      });
+
+    const points = [centre];
+    if (userLocation) {
+      L.circleMarker(centre, { radius: 9, color: '#1b7a54', weight: 3, fillColor: '#b5ec56', fillOpacity: 1 })
+        .addTo(map).bindPopup('<b>You are here</b>');
+      if (userLocation.accuracy) {
+        L.circle(centre, { radius: userLocation.accuracy, color: '#1b7a54', weight: 1, fillOpacity: 0.08 }).addTo(map);
+      }
+    } else {
+      L.marker(centre).addTo(map).bindPopup('Default area — share your location to see who is nearest.');
     }
+
+    (Array.isArray(workers) ? workers : []).forEach(w => {
+      const pos = workerPosition(w);
+      if (!pos) return;
+      L.marker([pos.lat, pos.lng]).addTo(map)
+        .bindPopup(`<b>${esc(w.name)}</b><br>${esc(w.category)} · ${workerDistanceLabel(w)}`);
+      points.push([pos.lat, pos.lng]);
+    });
+
+    if (points.length > 1) map.fitBounds(points, { padding: [36, 36], maxZoom: 15 });
+    // The map div is often sized after this runs; recalculate so tiles fill it.
+    setTimeout(() => { try { map.invalidateSize(); } catch (_) {} }, 120);
   } catch (mapErr) {
     console.warn('Map initialization:', mapErr);
   }
@@ -921,6 +1130,7 @@ function redirectForRole(route) {
 
 /* ─── Mount & bind ─── */
 async function mount() {
+  closeChatSocket();
   const hash = location.hash.slice(2) || '';
   const [route, id] = hash.split('?')[0].split('/');
   const redirect = redirectForRole(route);
@@ -945,6 +1155,8 @@ async function mount() {
     else if (route === 'emergency') content = await emergency();
     else if (route === 'groups') content = await groups();
     else if (route === 'community') content = await community();
+    else if (route === 'estimate') content = await estimatePage();
+    else if (route === 'chat') content = await chatPage(id);
     else content = await home();
 
     $('#app').innerHTML = nav() + content + foot();
@@ -965,12 +1177,24 @@ async function mount() {
 
 function bindNav() {
   $('#navToggle')?.addEventListener('click', () => $('#navLinks')?.classList.toggle('open'));
+  const navEl = $('#mainNav');
+  if (navEl && !window._navScrollBound) {
+    window._navScrollBound = true;
+    const onScroll = () => $('#mainNav')?.classList.toggle('scrolled', window.scrollY > 8);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+  }
   $$('.nav-link').forEach(a => a.addEventListener('click', () => $('#navLinks')?.classList.remove('open')));
 }
 
 function bind(route, id) {
   if (route === 'services') {
+    renderLocationBar();
     loadWorkers();
+    if (!userLocation && locationState === 'unknown') {
+      renderLocationBarAsking();
+      requestUserLocation().then(loc => { renderLocationBar(); if (loc) loadWorkers(); });
+    }
     ['workerSearch', 'categoryFilter', 'availableFilter'].forEach(x => $('#' + x)?.addEventListener(x === 'workerSearch' ? 'input' : 'change', loadWorkers));
   }
   if (route === 'availability' || route === 'provider') {
@@ -1039,7 +1263,7 @@ function bind(route, id) {
         e.target.reset();
       } catch (err) { $('#bookingNotice').innerHTML = `<div class="alert error">${err.message}</div>`; }
     });
-    api('/workers/' + id).then(w => renderMap([w]));
+    requestUserLocation().then(() => api('/workers/' + id).then(w => renderMap([w])));
   }
   if (route === 'join') {
     $('#joinForm')?.addEventListener('submit', async e => {
@@ -1065,6 +1289,19 @@ function bind(route, id) {
       tab.classList.add('active');
       $('#tab-' + tab.dataset.tab)?.classList.remove('hidden');
     }));
+  }
+  if (route === 'estimate') {
+    $('#estimateForm')?.addEventListener('submit', handleEstimate);
+    $$('.estimate-example').forEach(chip => chip.addEventListener('click', () => {
+      const input = $('#estimateText');
+      if (!input) return;
+      input.value = chip.dataset.text || '';
+      $('#estimateForm')?.requestSubmit();
+    }));
+  }
+  if (route === 'chat') {
+    openChatSocket(id);
+    $('#chatForm')?.addEventListener('submit', sendChatMessage);
   }
   if (route === 'help') {
     $('#helpForm')?.addEventListener('submit', e => {
@@ -1105,5 +1342,314 @@ window.selectEmergency = selectEmergency;
 window.joinGroup = joinGroup;
 window.volunteer = volunteer;
 window.resolveHelp = resolveHelp;
+
+
+/* ─── Price estimator ───────────────────────────────────────────────────────
+   Asks the server to read a plain-language description and return a price
+   band. The reasoning is shown alongside the number: a quote a customer
+   cannot interrogate is a quote they cannot trust. */
+
+const ESTIMATE_EXAMPLES = [
+  'My kitchen sink is leaking under the tap',
+  'Ceiling fan makes noise and wobbles',
+  'Need a deep clean before moving in',
+  'Bedroom door hinge has come loose',
+  'AC is running but not cooling'
+];
+
+async function estimatePage() {
+  return `<main class="page page-enter">
+    <span class="eyebrow">${icons.estimate} Price guide</span>
+    <h1 class="page-title">What should this cost?</h1>
+    <p class="lead">Describe the problem in your own words. We match it against our co-op rate card and show you the range before you book, along with how we got there.</p>
+
+    <div class="profile estimate-layout">
+      <section class="profile-pane">
+        <form class="form" id="estimateForm">
+          <label>Describe the problem
+            <textarea id="estimateText" name="description" required minlength="3" maxlength="500"
+              placeholder="e.g. My kitchen sink is leaking under the tap"></textarea>
+          </label>
+          <label>How urgent is it?
+            <select name="urgency" id="estimateUrgency">
+              <option value="Standard">Standard — within a few days</option>
+              <option value="High">Urgent — today if possible</option>
+            </select>
+          </label>
+          <button class="btn lime btn-block">Estimate the cost</button>
+        </form>
+
+        <div class="estimate-examples">
+          <p class="muted">Or try one of these:</p>
+          <div class="chip-row">
+            ${ESTIMATE_EXAMPLES.map(t => `<button type="button" class="estimate-example chip" data-text="${esc(t)}">${esc(t)}</button>`).join('')}
+          </div>
+        </div>
+      </section>
+
+      <section class="profile-pane" id="estimateResultPane">
+        <div class="empty-state compact">
+          <div class="empty-icon">${icons.estimate}</div>
+          <p>Your estimate will appear here.</p>
+        </div>
+      </section>
+    </div>
+
+    <p class="muted estimate-footnote">Estimates are a guide, not a quote. The professional confirms the final price before starting work, and 92% of it goes to them.</p>
+  </main>`;
+}
+
+async function handleEstimate(e) {
+  e.preventDefault();
+  const pane = $('#estimateResultPane');
+  const description = $('#estimateText')?.value.trim();
+  const urgency = $('#estimateUrgency')?.value || 'Standard';
+  if (!description || !pane) return;
+
+  pane.innerHTML = `<div class="empty-state compact"><p class="muted">Working out a range…</p></div>`;
+  try {
+    const r = await api('/api/estimate-price', {
+      method: 'POST',
+      body: JSON.stringify({ description, urgency })
+    });
+    pane.innerHTML = estimateResultCard(r);
+  } catch (err) {
+    pane.innerHTML = `<div class="alert error">${esc(err.message)}</div>`;
+  }
+}
+
+function estimateResultCard(r) {
+  const confClass = r.confidence >= 75 ? 'high' : r.confidence >= 50 ? 'medium' : 'low';
+  return `<div class="estimate-result animate-up">
+    <span class="eyebrow">${esc(r.category)}</span>
+    <p class="estimate-range">${r.currency}${r.low.toLocaleString('en-IN')} – ${r.currency}${r.high.toLocaleString('en-IN')}</p>
+    <p class="estimate-job">for ${esc(r.job)}${r.urgency === 'High' ? ' <span class="badge urgent-badge">Urgent</span>' : ''}</p>
+
+    <div class="confidence-block">
+      <div class="confidence-head">
+        <span>Confidence</span>
+        <b class="conf-${confClass}">${r.confidence}% · ${esc(r.confidence_label)}</b>
+      </div>
+      <div class="confidence-track"><div class="confidence-fill conf-${confClass}" style="width:${r.confidence}%"></div></div>
+    </div>
+
+    <h3 class="estimate-why">How we got here</h3>
+    <ul class="estimate-reasons">
+      ${r.reasoning.map(x => `<li>${esc(x)}</li>`).join('')}
+    </ul>
+
+    ${r.matched ? `<a class="btn lime btn-block estimate-cta" href="#/services?category=${encodeURIComponent(r.category)}">Find a ${esc(r.category)} professional</a>`
+                : `<a class="btn ghost btn-block estimate-cta" href="#/services">Browse all professionals</a>`}
+  </div>`;
+}
+
+/* ─── Privacy-safe chat ─────────────────────────────────────────────────────
+   Customer and worker share a room keyed on the booking, so neither needs the
+   other's phone number. The server strips anything that looks like a phone
+   number or an email before it reaches the other side. */
+
+let chatSocket = null;
+let chatRoom = null;
+
+function closeChatSocket() {
+  if (chatSocket) {
+    try { chatSocket.close(); } catch (_) {}
+    chatSocket = null;
+  }
+  chatRoom = null;
+}
+
+async function chatPage(room) {
+  const user = getUser();
+  const label = room ? room.replace(/^booking-/, 'Booking #') : 'Conversation';
+  return `<main class="page page-enter chat-page">
+    <a href="${isWorker() ? '#/jobs' : '#/customer'}" class="back-link">← Back to bookings</a>
+    <div class="chat-head">
+      <div>
+        <span class="eyebrow">${icons.chat} Private conversation</span>
+        <h1 class="page-title sm">${esc(label)}</h1>
+      </div>
+      <span class="chat-presence" id="chatPresence">Connecting…</span>
+    </div>
+
+    <p class="chat-privacy-note">${icons.lock} Phone numbers and email addresses are removed automatically. Arrange everything here and neither side has to share personal contact details.</p>
+
+    <div class="chat-box">
+      <div class="chat-log" id="chatLog" role="log" aria-live="polite" aria-label="Messages"></div>
+      <form class="chat-composer" id="chatForm">
+        <input id="chatInput" autocomplete="off" maxlength="1000"
+          placeholder="Write a message${user ? ', ' + esc(user.name.split(' ')[0]) : ''}…" aria-label="Message">
+        <button class="btn lime" type="submit">Send</button>
+      </form>
+    </div>
+  </main>`;
+}
+
+function openChatSocket(room) {
+  if (!room) return;
+  const user = getUser();
+  if (!user) return;
+
+  chatRoom = room;
+  const base = API || (location.protocol + '//' + location.host);
+  const wsUrl = base.replace(/^http/, 'ws')
+    + '/ws/chat/' + encodeURIComponent(room)
+    + '?name=' + encodeURIComponent(user.name)
+    + '&role=' + encodeURIComponent(user.role);
+
+  try {
+    chatSocket = new WebSocket(wsUrl);
+  } catch (err) {
+    setChatPresence('Could not connect');
+    return;
+  }
+
+  chatSocket.addEventListener('open', () => setChatPresence('Connected'));
+  chatSocket.addEventListener('close', () => setChatPresence('Disconnected'));
+  chatSocket.addEventListener('error', () => setChatPresence('Connection problem'));
+  chatSocket.addEventListener('message', ev => {
+    let frame;
+    try { frame = JSON.parse(ev.data); } catch { return; }
+
+    if (frame.type === 'history') {
+      const log = $('#chatLog');
+      if (!log) return;
+      log.innerHTML = frame.messages.length
+        ? frame.messages.map(chatBubble).join('')
+        : `<p class="chat-empty">No messages yet. Say hello to get started.</p>`;
+      setChatPresence(frame.occupants > 1 ? 'Both of you are here' : 'You are here');
+      scrollChatToEnd();
+    } else if (frame.type === 'message') {
+      const log = $('#chatLog');
+      if (!log) return;
+      $('.chat-empty')?.remove();
+      log.insertAdjacentHTML('beforeend', chatBubble(frame));
+      scrollChatToEnd();
+    } else if (frame.type === 'presence') {
+      setChatPresence(frame.occupants > 1 ? 'Both of you are here' : 'You are here');
+    }
+  });
+}
+
+function chatBubble(m) {
+  const me = getUser();
+  const mine = me && m.sender_name === me.name;
+  const time = m.created_at
+    ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
+  return `<div class="chat-msg ${mine ? 'mine' : 'theirs'}">
+    <div class="chat-bubble">
+      ${mine ? '' : `<b class="chat-sender">${esc(m.sender_name)}<span class="chat-role">${esc(m.sender_role || '')}</span></b>`}
+      <p>${esc(m.body)}</p>
+      <span class="chat-time">${time}${m.redacted ? ' · contact details removed' : ''}</span>
+    </div>
+  </div>`;
+}
+
+function setChatPresence(text) {
+  const el = $('#chatPresence');
+  if (el) el.textContent = text;
+}
+
+function scrollChatToEnd() {
+  const log = $('#chatLog');
+  if (log) log.scrollTop = log.scrollHeight;
+}
+
+function sendChatMessage(e) {
+  e.preventDefault();
+  const input = $('#chatInput');
+  const body = input?.value.trim();
+  if (!body) return;
+  if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
+    setChatPresence('Not connected — reload to retry');
+    return;
+  }
+  chatSocket.send(JSON.stringify({ body }));
+  input.value = '';
+  input.focus();
+}
+
+/* ─── Social proof toasts ───────────────────────────────────────────────────
+   Sample activity from around the co-op, shown while browsing. Clearly
+   labelled as sample data so nobody mistakes it for a live feed. */
+
+const TOAST_NAMES = ['Rahul', 'Ananya', 'Vikram', 'Priya', 'Arjun', 'Meera',
+                     'Kabir', 'Divya', 'Rohan', 'Sneha', 'Imran', 'Lakshmi'];
+const TOAST_CITIES = ['New Delhi', 'Bengaluru', 'Hyderabad', 'Chennai', 'Pune',
+                      'Mumbai', 'Jaipur', 'Kolkata', 'Vellore', 'Kochi'];
+const TOAST_SERVICES = ['a Plumber', 'an Electrician', 'a Deep Clean', 'a Carpenter',
+                        'an AC Service', 'a Painter', 'a Home Tutor', 'an Appliance Repair'];
+
+let toastTimer = null;
+
+function ensureToastHost() {
+  let host = document.getElementById('toastHost');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toastHost';
+    host.className = 'toast-host';
+    host.setAttribute('aria-live', 'polite');
+    host.setAttribute('aria-atomic', 'true');
+    document.body.appendChild(host);
+  }
+  return host;
+}
+
+function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
+
+function showSocialToast() {
+  // Never interrupt someone mid-conversation or mid-form.
+  if (document.hidden) return;
+  if (currentRoute() === 'chat') return;
+
+  const host = ensureToastHost();
+  if (host.children.length >= 2) return;
+
+  const minutes = 1 + Math.floor(Math.random() * 9);
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.innerHTML = `<span class="toast-dot"></span>
+    <div class="toast-body">
+      <b>${pick(TOAST_NAMES)} from ${pick(TOAST_CITIES)}</b>
+      <p>just booked ${pick(TOAST_SERVICES)} · ${minutes} min ago</p>
+    </div>
+    <span class="toast-tag">Sample activity</span>`;
+  host.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add('in'));
+  setTimeout(() => {
+    toast.classList.remove('in');
+    setTimeout(() => toast.remove(), 400);
+  }, 4000);
+}
+
+function scheduleSocialToast() {
+  clearTimeout(toastTimer);
+  const delay = 10000 + Math.random() * 5000;   // every 10-15s
+  toastTimer = setTimeout(() => {
+    showSocialToast();
+    scheduleSocialToast();
+  }, delay);
+}
+
+function startSocialProof() {
+  // Respect a reduced-motion preference: the toasts are pure ambience.
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  scheduleSocialToast();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) clearTimeout(toastTimer);
+    else scheduleSocialToast();
+  });
+}
+
+startSocialProof();
+
+window.handleEstimate = handleEstimate;
+window.sendChatMessage = sendChatMessage;
+
+/* ─── Boot ───
+   Must stay last: the router touches module state declared with `let` above,
+   which is not initialised until execution reaches those lines. */
 window.addEventListener('hashchange', guardedMount);
 guardedMount();

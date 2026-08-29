@@ -1,18 +1,71 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="VConnect — trusted local services platform for customers and cooperative workers."><meta name="theme-color" content="#14251f"><title>VConnect | Trusted local services</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><link rel="stylesheet" href="style.css"></head><body><div id="app"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="VConnect — trusted local services platform for customers and cooperative workers.">
+  <meta name="theme-color" content="#14251f">
+  <title>VConnect | Trusted local services</title>
 
-<link rel="stylesheet" href="/static/style.css">
-<script src="/static/app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
 
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#app">Skip to content</a>
 
-<!-- Add these to your registration form -->
-<select id="reg-category" class="form-control">
-    <option value="Plumbing">Plumbing</option>
-    <option value="Electrical">Electrical</option>
-    <option value="Cleaning">Cleaning</option>
-    <option value="Carpentry">Carpentry</option>
-</select>
+  <!-- Language picker. It lives outside #app because the router rewrites
+       #app.innerHTML on every navigation, which would destroy the widget. -->
+  <div class="lang-switcher" id="langSwitcher">
+    <svg class="lang-icon" width="15" height="15" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path>
+    </svg>
+    <div id="google_translate_element"></div>
+  </div>
 
-<input type="text" id="reg-skills" placeholder="Specific skills (e.g., Pipe fitting, wiring)" class="form-control">
-<input type="text" id="reg-experience" placeholder="Experience (e.g., 5 years)" class="form-control">
-<input type="number" id="reg-price" placeholder="Hourly price in ₹" class="form-control">
-<textarea id="reg-bio" placeholder="Tell customers about yourself..." class="form-control"></textarea>
+  <div id="app" tabindex="-1"></div>
+
+  <noscript>
+    <div class="noscript-notice">
+      <h1>VConnect needs JavaScript</h1>
+      <p>This page builds its content in the browser. Turn on JavaScript for this site, then reload.</p>
+    </div>
+  </noscript>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    // Google's website translator. No backend involved: the widget swaps the
+    // rendered text in place. googleTranslateElementInit must be global.
+    function googleTranslateElementInit() {
+      new google.translate.TranslateElement({
+        pageLanguage: 'en',
+        includedLanguages: 'en,hi,te,ta,kn,ml,mr,bn,gu,pa,ur',
+        layout: google.translate.TranslateElement.InlineLayout.SIMPLE,
+        autoDisplay: false
+      }, 'google_translate_element');
+    }
+    // The widget injects a banner that pushes <body> down by ~40px. This
+    // keeps the sticky nav aligned no matter what the banner does.
+    (function keepBodyPinned() {
+      var fix = function () {
+        if (document.body && document.body.style.top !== '0px') {
+          document.body.style.top = '0px';
+        }
+      };
+      new MutationObserver(fix).observe(document.documentElement, {
+        attributes: true, subtree: true, attributeFilter: ['style', 'class']
+      });
+      window.addEventListener('load', fix);
+    })();
+  </script>
+  <script src="https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit" async></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="app.js"></script>
+</body>
+</html>

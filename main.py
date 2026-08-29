@@ -1,9 +1,11 @@
 from pathlib import Path
 import sqlite3
+import re
 import hashlib, secrets
+import os, json, urllib.request, urllib.parse
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query, Header
+from fastapi import FastAPI, HTTPException, Query, Header, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -11,6 +13,17 @@ from pydantic import BaseModel, Field
 from recommendations import rank_workers, vtrust_score
 
 DB = Path(__file__).parent / "vconnect.db"
+
+# --- Google Sign-In configuration -------------------------------------------
+# Set GOOGLE_CLIENT_ID in the environment to enable the "Continue with Google"
+# button. When it is empty the button is hidden and the app falls back to
+# ordinary email + password auth.
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
+GOOGLE_TOKENINFO = 'https://oauth2.googleapis.com/tokeninfo?id_token='
+GOOGLE_ISSUERS = {'accounts.google.com', 'https://accounts.google.com'}
+# Google accounts have no local password. This sentinel is deliberately not
+# valid hex, so it can never equal a pbkdf2 hash and cannot be password-logged-in.
+GOOGLE_NO_PASSWORD = 'google-oauth-account-no-password'
 
 app = FastAPI(title="VConnect API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -75,9 +88,17 @@ class AuthRequest(BaseModel):
     price: Optional[int] = 300
     bio: Optional[str] = "Cooperative member ready to work."
 
+class GoogleAuthRequest(BaseModel):
+    credential: str
+    role: str = 'customer'
+
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+class PriceEstimateRequest(BaseModel):
+    description: str = Field(min_length=3, max_length=500)
+    urgency: Optional[str] = 'Standard'   # Standard | High
 
 def connection():
     con = sqlite3.connect(DB)
@@ -101,6 +122,8 @@ def initialize():
         CREATE TABLE IF NOT EXISTS help_volunteers(id INTEGER PRIMARY KEY AUTOINCREMENT, help_id INTEGER, volunteer_name TEXT, UNIQUE(help_id, volunteer_name));
         CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT UNIQUE, password_hash TEXT, role TEXT CHECK(role IN ('customer','worker')), worker_id INTEGER, created_at TEXT);
         CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS chat_messages(id INTEGER PRIMARY KEY AUTOINCREMENT, room TEXT, sender_name TEXT, sender_role TEXT, body TEXT, created_at TEXT);
+        CREATE INDEX IF NOT EXISTS idx_chat_room ON chat_messages(room, id);
         ''')
         columns={r[1] for r in con.execute('PRAGMA table_info(bookings)')}
         if 'priority' not in columns: con.execute("ALTER TABLE bookings ADD COLUMN priority TEXT DEFAULT 'Standard'")
@@ -201,6 +224,54 @@ def login(data: LoginRequest):
             get_or_create_worker_for_user(con, user['id'], user['name'])
         con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',(token,user['id'],datetime.now().isoformat()))
     return {'token':token,'user':current_user(token)}
+
+def verify_google_token(credential: str) -> dict:
+    """Validate a Google ID token and return the verified identity.
+
+    Uses Google's tokeninfo endpoint so no extra dependency is needed; Google
+    checks the signature and expiry, and we check the audience and issuer.
+    """
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(503, 'Google sign-in is not configured on this server.')
+    try:
+        url = GOOGLE_TOKENINFO + urllib.parse.quote(credential, safe='')
+        with urllib.request.urlopen(url, timeout=10) as response:
+            info = json.loads(response.read().decode())
+    except Exception:
+        raise HTTPException(401, 'Could not verify your Google sign-in. Please try again.')
+    if info.get('aud') != GOOGLE_CLIENT_ID:
+        raise HTTPException(401, 'This Google sign-in was issued for a different app.')
+    if info.get('iss') not in GOOGLE_ISSUERS:
+        raise HTTPException(401, 'Untrusted Google token issuer.')
+    if str(info.get('email_verified', '')).lower() not in {'true', '1'}:
+        raise HTTPException(401, 'Your Google email address is not verified.')
+    email = (info.get('email') or '').lower().strip()
+    if not email:
+        raise HTTPException(401, 'Google did not return an email address.')
+    return {'email': email, 'name': (info.get('name') or email.split('@')[0]).strip()}
+
+@app.get('/auth/config')
+def auth_config():
+    """Lets the frontend know whether to show the Google button."""
+    return {'google_client_id': GOOGLE_CLIENT_ID}
+
+@app.post('/auth/google')
+def google_auth(data: GoogleAuthRequest):
+    if data.role not in {'customer', 'worker'}: raise HTTPException(422, 'Select Customer or Worker')
+    profile = verify_google_token(data.credential)
+    with connection() as con:
+        found = con.execute('SELECT id,name,role,worker_id FROM users WHERE email=?', (profile['email'],)).fetchone()
+        if found:
+            user_id, user_name, role, worker_id = found[0], found[1], found[2], found[3]
+        else:
+            cur = con.execute('INSERT INTO users(name,email,password_hash,role,created_at) VALUES(?,?,?,?,?)',
+                (profile['name'], profile['email'], GOOGLE_NO_PASSWORD, data.role, datetime.now().isoformat()))
+            user_id, user_name, role, worker_id = cur.lastrowid, profile['name'], data.role, None
+        if role == 'worker' and not worker_id:
+            get_or_create_worker_for_user(con, user_id, user_name)
+        token = secrets.token_urlsafe(24)
+        con.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)', (token, user_id, datetime.now().isoformat()))
+    return {'token': token, 'user': current_user(token)}
 
 @app.get('/auth/me')
 def me(token: Optional[str]=None, token_header: Optional[str]=Header(None, alias="token")):
@@ -340,3 +411,294 @@ def admin_summary():
     members=rows('SELECT count(*) AS n FROM memberships')[0]['n']
     active=rows('SELECT count(*) AS n FROM workers WHERE available=1')[0]['n']
     return {'members':members,'active_workers':active,'completed_services':completed,'community_earnings':completed*450+12650,'commission':'For every ₹500 service: ₹460 goes to the worker and ₹40 (8%) funds cooperative training, support, and local community programs.','members_list':rows('SELECT workers.name,workers.category,workers.rating,workers.avatar,memberships.joined_at FROM memberships JOIN workers ON workers.id=memberships.worker_id')}
+
+
+# -----------------------------------------------------------------------------
+# Price estimator
+#
+# A transparent keyword model, not a machine-learned one. Every number below is
+# a rule you can read, which is the point: a customer is told why they were
+# quoted what they were quoted. Ranges are rupees for a single visit.
+# -----------------------------------------------------------------------------
+
+ESTIMATOR_RULES = {
+    'Plumbing': {
+        'base': (350, 900),
+        'keywords': ['leak', 'leaking', 'tap', 'faucet', 'pipe', 'drain', 'sink', 'toilet',
+                     'flush', 'water', 'blockage', 'clog', 'geyser', 'water heater'],
+        'jobs': {
+            'tap washer or minor leak': (['tap', 'faucet', 'washer', 'drip'], (350, 600)),
+            'blocked drain': (['drain', 'blockage', 'clog', 'clogged', 'choked'], (500, 1100)),
+            'pipe replacement': (['pipe', 'burst', 'replace'], (800, 2200)),
+            'water heater service': (['geyser', 'water heater', 'heater'], (700, 1800)),
+        },
+    },
+    'Electrical': {
+        'base': (300, 850),
+        'keywords': ['switch', 'socket', 'wire', 'wiring', 'fan', 'power', 'light', 'bulb',
+                     'short circuit', 'mcb', 'fuse', 'shock', 'inverter'],
+        'jobs': {
+            'switch or socket replacement': (['switch', 'socket', 'plug point'], (300, 650)),
+            'fan install or repair': (['fan', 'ceiling fan', 'exhaust'], (400, 1000)),
+            'rewiring': (['wiring', 'rewire', 'short circuit', 'shock'], (900, 2500)),
+            'light fitting': (['light', 'bulb', 'tube', 'chandelier'], (350, 900)),
+        },
+    },
+    'Cleaning': {
+        'base': (600, 1600),
+        'keywords': ['clean', 'cleaning', 'dust', 'mop', 'stain', 'sofa', 'bathroom',
+                     'kitchen', 'deep clean', 'carpet'],
+        'jobs': {
+            'bathroom deep clean': (['bathroom', 'toilet', 'washroom'], (600, 1200)),
+            'full home deep clean': (['deep clean', 'full home', 'whole house', 'move in'], (1800, 4500)),
+            'sofa or carpet clean': (['sofa', 'carpet', 'upholstery', 'mattress'], (800, 2000)),
+        },
+    },
+    'Carpentry': {
+        'base': (400, 1200),
+        'keywords': ['door', 'wood', 'wooden', 'shelf', 'furniture', 'cabinet', 'drawer',
+                     'hinge', 'lock', 'table', 'chair', 'bed'],
+        'jobs': {
+            'door or hinge repair': (['door', 'hinge', 'lock', 'latch'], (400, 1000)),
+            'furniture assembly': (['assemble', 'assembly', 'install', 'fitting'], (500, 1400)),
+            'custom woodwork': (['cabinet', 'wardrobe', 'shelf', 'custom'], (1500, 6000)),
+        },
+    },
+    'Appliance Repair': {
+        'base': (450, 1400),
+        'keywords': ['washing machine', 'fridge', 'refrigerator', 'ac ', 'air conditioner',
+                     'microwave', 'oven', 'dishwasher', 'appliance'],
+        'jobs': {
+            'air conditioner service': (['ac ', 'air conditioner', 'cooling'], (600, 1800)),
+            'washing machine repair': (['washing machine', 'washer', 'laundry'], (500, 1600)),
+            'refrigerator repair': (['fridge', 'refrigerator', 'freezer'], (600, 2000)),
+        },
+    },
+    'Painting': {
+        'base': (1500, 5000),
+        'keywords': ['paint', 'painting', 'wall', 'colour', 'color', 'whitewash', 'putty'],
+        'jobs': {
+            'single room': (['room', 'bedroom', 'one wall', 'wall'], (1500, 4000)),
+            'full flat repaint': (['full flat', 'apartment', 'whole house'], (8000, 25000)),
+        },
+    },
+    'Home Tutoring': {
+        'base': (300, 800),
+        'keywords': ['tutor', 'tuition', 'maths', 'math', 'science', 'homework', 'exam', 'class'],
+        'jobs': {'per session tutoring': (['tutor', 'tuition', 'class', 'session'], (300, 800))},
+    },
+}
+
+URGENCY_MULTIPLIER = {'Standard': 1.0, 'High': 1.35}
+
+
+def _round_to_50(n):
+    return int(round(n / 50.0) * 50)
+
+
+@app.post('/api/estimate-price')
+def estimate_price(data: PriceEstimateRequest):
+    """Estimate a price range from a plain-language description of a problem."""
+    text = data.description.lower().strip()
+
+    # Score each category by how many of its keywords appear in the text.
+    scored = []
+    for category, rule in ESTIMATOR_RULES.items():
+        hits = [k for k in rule['keywords'] if k in text]
+        if hits:
+            scored.append((len(hits), category, hits))
+    scored.sort(key=lambda row: row[0], reverse=True)
+
+    if not scored:
+        return {
+            'matched': False,
+            'category': 'Community Services',
+            'job': 'general assessment visit',
+            'low': 300, 'high': 700, 'currency': '\u20b9',
+            'confidence': 25, 'confidence_label': 'Low',
+            'urgency': 'Standard', 'matched_terms': [],
+            'reasoning': [
+                'No familiar service keywords were recognised in the description.',
+                'Showing a general call-out range for an assessment visit.',
+            ],
+            'message': 'Not enough detail to place this yet. A local member can visit and assess.',
+        }
+
+    hit_count, category, hits = scored[0]
+    rule = ESTIMATOR_RULES[category]
+
+    # Narrow to a specific job when its terms appear; otherwise use the category base.
+    job_name = 'general ' + category.lower() + ' work'
+    low, high = rule['base']
+    for name, (terms, price_range) in rule['jobs'].items():
+        if any(t in text for t in terms):
+            job_name = name
+            low, high = price_range
+            break
+
+    urgency = 'High' if data.urgency == 'High' else 'Standard'
+    multiplier = URGENCY_MULTIPLIER[urgency]
+    low, high = _round_to_50(low * multiplier), _round_to_50(high * multiplier)
+
+    # Confidence grows with keyword evidence and with how much detail was given.
+    confidence = 45 + min(hit_count, 4) * 10
+    if len(text.split()) >= 6:
+        confidence += 8
+    if len(scored) > 1 and scored[1][0] == hit_count:
+        confidence -= 15          # an equally strong second category means ambiguity
+    confidence = max(20, min(95, confidence))
+    label = 'High' if confidence >= 75 else 'Medium' if confidence >= 50 else 'Low'
+
+    reasoning = [
+        'Matched ' + category + ' on: ' + ', '.join(hits[:4]) + '.',
+        'Closest job type: ' + job_name + '.',
+    ]
+    if urgency == 'High':
+        reasoning.append('Emergency callout applies a 35% priority uplift.')
+    if len(scored) > 1:
+        reasoning.append('Also considered: ' + ', '.join(row[1] for row in scored[1:3]) + '.')
+
+    return {
+        'matched': True,
+        'category': category,
+        'job': job_name,
+        'low': low, 'high': high, 'currency': '\u20b9',
+        'confidence': confidence,
+        'confidence_label': label,
+        'urgency': urgency,
+        'matched_terms': hits[:6],
+        'reasoning': reasoning,
+        'message': 'Estimated \u20b9' + str(low) + '-\u20b9' + str(high) + ' for ' + job_name + '.',
+    }
+
+
+# -----------------------------------------------------------------------------
+# Privacy-safe in-app chat
+#
+# Customers and workers talk through a room keyed on the booking, so neither
+# side ever needs the other's phone number. Messages are relayed over a
+# WebSocket and stored so the thread survives a page reload.
+#
+# Because the point of the feature is to keep contact details private, the
+# server strips anything that looks like a phone number or an email out of
+# every message before it is stored or broadcast.
+# -----------------------------------------------------------------------------
+
+CONTACT_PATTERNS = [
+    re.compile(r'[\w.+-]+@[\w-]+\.[\w.]+'),                       # email
+    re.compile(r'\+?\d(?:[\s.-]?\d){8,14}'),                      # phone-ish digit runs
+]
+
+def redact_contact_details(text):
+    """Replace anything resembling a phone number or email with a notice."""
+    cleaned = text
+    for pattern in CONTACT_PATTERNS:
+        cleaned = pattern.sub('[contact details hidden]', cleaned)
+    return cleaned
+
+
+class ChatRooms:
+    """Tracks who is currently connected to each room."""
+
+    def __init__(self):
+        self.rooms = {}
+
+    async def join(self, room, websocket):
+        await websocket.accept()
+        self.rooms.setdefault(room, []).append(websocket)
+
+    def leave(self, room, websocket):
+        sockets = self.rooms.get(room)
+        if not sockets:
+            return
+        if websocket in sockets:
+            sockets.remove(websocket)
+        if not sockets:
+            self.rooms.pop(room, None)
+
+    def occupants(self, room):
+        return len(self.rooms.get(room, []))
+
+    async def broadcast(self, room, payload):
+        dead = []
+        for socket in list(self.rooms.get(room, [])):
+            try:
+                await socket.send_json(payload)
+            except Exception:
+                dead.append(socket)
+        for socket in dead:
+            self.leave(room, socket)
+
+
+chat_rooms = ChatRooms()
+
+
+def chat_history(room, limit=50):
+    return rows(
+        'SELECT sender_name, sender_role, body, created_at FROM chat_messages '
+        'WHERE room=? ORDER BY id DESC LIMIT ?', (room, limit)
+    )[::-1]
+
+
+@app.get('/chat/{room}/history')
+def get_chat_history(room: str):
+    """Past messages for a room, oldest first."""
+    return chat_history(room)
+
+
+@app.websocket('/ws/chat/{room}')
+async def chat_socket(websocket: WebSocket, room: str):
+    # The display name and role travel as query params; no contact details are
+    # exchanged, which is the whole point of routing conversation through here.
+    params = websocket.query_params
+    name = (params.get('name') or 'Guest').strip()[:40]
+    role = params.get('role') if params.get('role') in ('customer', 'worker') else 'guest'
+
+    await chat_rooms.join(room, websocket)
+    try:
+        await websocket.send_json({
+            'type': 'history',
+            'messages': chat_history(room),
+            'occupants': chat_rooms.occupants(room),
+        })
+        await chat_rooms.broadcast(room, {
+            'type': 'presence',
+            'occupants': chat_rooms.occupants(room),
+            'joined': name,
+        })
+
+        while True:
+            incoming = await websocket.receive_json()
+            body = str(incoming.get('body', '')).strip()[:1000]
+            if not body:
+                continue
+
+            safe_body = redact_contact_details(body)
+            redacted = safe_body != body
+            stamp = datetime.now().isoformat()
+
+            with connection() as con:
+                con.execute(
+                    'INSERT INTO chat_messages(room, sender_name, sender_role, body, created_at) '
+                    'VALUES(?,?,?,?,?)', (room, name, role, safe_body, stamp)
+                )
+
+            await chat_rooms.broadcast(room, {
+                'type': 'message',
+                'sender_name': name,
+                'sender_role': role,
+                'body': safe_body,
+                'created_at': stamp,
+                'redacted': redacted,
+            })
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        chat_rooms.leave(room, websocket)
+        await chat_rooms.broadcast(room, {
+            'type': 'presence',
+            'occupants': chat_rooms.occupants(room),
+            'left': name,
+        })
