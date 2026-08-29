@@ -12,7 +12,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from recommendations import rank_workers, vtrust_score
 
-DB = Path(__file__).parent / "vconnect.db"
+BASE_DIR = Path(__file__).parent
+DB = BASE_DIR / "vconnect.db"
 
 # --- Google Sign-In configuration -------------------------------------------
 # Set GOOGLE_CLIENT_ID in the environment to enable the "Continue with Google"
@@ -28,11 +29,25 @@ GOOGLE_NO_PASSWORD = 'google-oauth-account-no-password'
 app = FastAPI(title="VConnect API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-app.mount("/static", StaticFiles(directory="."), name="static")
+app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 @app.get("/")
 def read_root():
-    return FileResponse("index.html")
+    return FileResponse(BASE_DIR / "index.html")
+
+
+# index.html references "style.css" and "app.js" with relative paths, so the
+# browser asks for them at the site root. Without these they 404 and the page
+# renders as an unstyled, script-less shell. Keeping the relative references
+# also lets the folder be served by any plain static file server.
+@app.get("/app.js")
+def serve_app_js():
+    return FileResponse(BASE_DIR / "app.js", media_type="application/javascript")
+
+
+@app.get("/style.css")
+def serve_style_css():
+    return FileResponse(BASE_DIR / "style.css", media_type="text/css")
 
 class WorkerAvailabilityUpdate(BaseModel):
     available: int
